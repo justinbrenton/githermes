@@ -1,3 +1,7 @@
 node_modules
 .worktrees
 .serena
+.githermes-pr/
+.hermes/
+IDEA.md
+project-summary.md
