@@ -1446,6 +1446,34 @@ function InboxView({ repo }) {
   const countClass = 'text-[13px] font-semibold text-(--ui-text-secondary) tabular-nums shrink-0 w-6 text-right'
   const titleClass = 'text-sm font-medium text-(--ui-text-primary) truncate'
   const metaClass = 'text-[11px] text-(--ui-text-tertiary) truncate'
+  const prsRows = prs.length ? prs.map(p => {
+    const prRepo = (p.repository && p.repository.nameWithOwner) ? p.repository.nameWithOwner : (repo || '')
+    const stateKey = (String(p.state || '').toLowerCase() === 'merged' ? 'merged' : String(p.state || '').toLowerCase() === 'closed' ? 'closed' : 'open')
+    const pill = STATE_PILL[stateKey] || STATE_PILL.open
+    const authorBadge = p.author?.login ? jsx('span', { className: 'font-medium', children: `@${p.author.login}` }) : null
+    return jsxs('button', { type: 'button', onClick: () => navigateToSessionPr(prRepo, p.number), className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent', children: [
+      jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: p.author?.login, size: 24 }) }),
+      jsxs('span', { className: 'min-w-0 flex-1', children: [
+        jsxs('button', { type: 'button', className: 'gh-row-open flex w-full items-center gap-1.5 text-left', children: [
+          jsx(Codicon, { name: pill.icon, size: 14, style: { color: pill.bg }, title: pill.label, className: 'shrink-0' }),
+          jsx(ItemTitle, { title: p.title, number: p.number }),
+        ] }),
+        jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
+          authorBadge,
+          jsx('span', { className: 'rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', children: p.repository?.name || '—' }),
+          jsx('span', { className: 'text-(--ui-text-quaternary)', children: '·' }),
+          jsx('span', { children: ago(p.updatedAt) || new Date(p.updatedAt || '').toLocaleDateString() }),
+        ] }),
+      ] }),
+      jsx(Codicon, { name: 'chevron-right', className: 'mt-1 shrink-0 text-(--ui-text-quaternary)', 'aria-hidden': true }),
+    ] })
+  }) : null
+  const needsActionRows = needsActionList.length
+    ? needsActionList.map(p => jsxs('button', { type: 'button', onClick: () => navigateToSessionPr(p.repository ? (p.repository.nameWithOwner || (repo || '')) : (repo || ''), p.number), className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent block', children: [jsx('span', { className: 'mt-0.5', children: jsx(Codicon, { name: 'warning', size: 20, style: { color: 'var(--ui-green)' } }) }), jsxs('span', { className: 'min-w-0 flex-1', children: [jsx('span', { className: 'block text-sm font-medium truncate', children: p.title || '' }), jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [`#${p.number ?? ''}`, ' · ', `Updated ${new Date(p.updatedAt || '').toLocaleDateString()}`] })] })] }, p.number))
+    : null
+  const readyMergeRows = readyMergeList.length
+    ? readyMergeList.map(p => jsxs('button', { type: 'button', onClick: () => navigateToSessionPr(p.repository ? (p.repository.nameWithOwner || (repo || '')) : (repo || ''), p.number), className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent block', children: [jsx('span', { className: 'mt-0.5', children: jsx(Codicon, { name: 'git-merge', size: 20, style: { color: 'var(--ui-green)' } }) }), jsxs('span', { className: 'min-w-0 flex-1', children: [jsx('span', { className: 'block text-sm font-medium truncate', children: p.title || '' }), jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [`#${p.number ?? ''}`, ' · ', `Updated ${new Date(p.updatedAt || '').toLocaleDateString()}`] })] })] }, p.number))
+    : null
   return jsx(ScrollArea, { className: 'h-full', children: jsx('div', { className: 'gh-list', children: [
     // Needs your review
     jsxs('section', { className: sectionClass, children: [
@@ -1469,39 +1497,19 @@ function InboxView({ repo }) {
     jsxs('section', { className: sectionClass, children: [
       jsxs('div', { className: 'flex items-baseline gap-2 px-2 mb-1', children: [jsx('h3', { className: 'gh-list-heading text-[10px] font-semibold', children: [jsx(Codicon, { name: 'git-pull-request', size: 12 }), '  ', 'Waiting for review or checks'] }), jsx('span', { className: countClass, children: String(prs.length || '0') })] }),
       jsx('p', { className: subClass + ' px-2', children: 'Pull requests waiting for approval, failing checks, merge conflicts, or required changes.' }),
-      prs.length ? prs.map(p => {
-        const prRepo = (p.repository && p.repository.nameWithOwner) ? p.repository.nameWithOwner : (repo || '')
-        const stateKey = (String(p.state || '').toLowerCase() === 'merged' ? 'merged' : String(p.state || '').toLowerCase() === 'closed' ? 'closed' : 'open')
-        const pill = STATE_PILL[stateKey] || STATE_PILL.open
-        return jsxs('button', { type: 'button', onClick: () => navigateToSessionPr(prRepo, p.number), className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent', children: [
-          jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: p.author?.login, size: 24 }) }),
-          jsxs('span', { className: 'min-w-0 flex-1', children: [
-            jsxs('button', { type: 'button', className: 'gh-row-open flex w-full items-center gap-1.5 text-left', children: [
-              jsx(Codicon, { name: pill.icon, size: 14, style: { color: pill.bg }, title: pill.label, className: 'shrink-0' }),
-              jsx(ItemTitle, { title: p.title, number: p.number }),
-            ] }),
-            jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
-              p.author?.login ? jsx('span', { className: 'font-medium', children: `@${p.author.login}` }) : null,
-              jsx('span', { className: 'rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', children: p.repository?.name || '—' }),
-              jsx('span', { className: 'text-(--ui-text-quaternary)', children: '·' }),
-              jsx('span', { children: ago(p.updatedAt) || new Date(p.updatedAt || '').toLocaleDateString() }),
-            ] }),
-          ] }),
-          jsx(Codicon, { name: 'chevron-right', className: 'mt-1 shrink-0 text-(--ui-text-quaternary)', 'aria-hidden': true }),
-        ] })
-      }) : jsx('p', { className: subClass + ' px-2 italic', children: 'All caught up' }),
+      prsRows || jsx('p', { className: subClass + ' px-2 italic', children: 'All caught up' }),
     ] }),
     // Needs action
     jsxs('section', { className: sectionClass, children: [
       jsxs('div', { className: 'flex items-baseline gap-2 px-2 mb-1', children: [jsx('h3', { className: 'gh-list-heading text-[10px] font-semibold', children: [jsx(Codicon, { name: 'warning', size: 12 }), '  ', 'NEEDS ACTION'] }), jsx('span', { className: countClass, children: String(needsActionList.length || '0') })] }),
       jsx('p', { className: subClass + ' px-2', children: 'Pull requests with failing checks, merge conflicts, outdated branches, or required changes will appear here.' }),
-    needsActionList.length ? needsActionList.map(p => jsxs('button', { type: 'button', onClick: () => navigateToSessionPr(p.repository ? (p.repository.nameWithOwner || (repo || '')) : (repo || ''), p.number), className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent block', children: [jsx('span', { className: 'mt-0.5', children: jsx(Codicon, { name: 'warning', size: 20, style: { color: 'var(--ui-green)' } }) }), jsxs('span', { className: 'min-w-0 flex-1', children: [jsx('span', { className: 'block text-sm font-medium truncate', children: p.title || '' }), jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [`#${p.number ?? ''}`, ' · ', `Updated ${new Date(p.updatedAt || '').toLocaleDateString()}`] })] })] }, p.number)) : jsx('p', { className: subClass + ' px-2 italic', children: 'No PRs need action right now.' }),
+      needsActionRows || jsx('p', { className: subClass + ' px-2 italic', children: 'No PRs need action right now.' }),
     ] }),
     // Ready to merge
     jsxs('section', { className: sectionClass, children: [
       jsxs('div', { className: 'flex items-baseline gap-2 px-2 mb-1', children: [jsx('h3', { className: 'gh-list-heading text-[10px] font-semibold', children: [jsx(Codicon, { name: 'git-merge', size: 12 }), '  ', 'READY TO MERGE'] }), jsx('span', { className: countClass, children: String(readyMergeList.length || '0') })] }),
       jsx('p', { className: subClass + ' px-2', children: 'Pull requests that are ready to merge will appear here.' }),
-      readyMergeList.length ? readyMergeList.map(p => jsxs('button', { type: 'button', onClick: () => navigateToSessionPr(p.repository ? (p.repository.nameWithOwner || (repo || '')) : (repo || ''), p.number), className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent block', children: [jsx('span', { className: 'mt-0.5', children: jsx(Codicon, { name: 'git-merge', size: 20, style: { color: 'var(--ui-green)' } }) }), jsxs('span', { className: 'min-w-0 flex-1', children: [jsx('span', { className: 'block text-sm font-medium truncate', children: p.title || '' }), jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [`#${p.number ?? ''}`, ' · ', `Updated ${new Date(p.updatedAt || '').toLocaleDateString()}`] })] })] }, p.number)) : jsx('p', { className: subClass + ' px-2 italic', children: 'No PRs ready to merge.' }),
+      readyMergeRows || jsx('p', { className: subClass + ' px-2 italic', children: 'No PRs ready to merge.' }),
     ] }),
   ] }) })
 }
@@ -3215,29 +3223,36 @@ function IssueList({ repo, onOpen, query, active = true }) {
           jsx('span', { className: 'font-normal text-(--ui-text-quaternary)', children: `Showing latest ${allItems.length}` }),
           jsx(Badge, { variant: 'secondary', className: 'ml-auto h-5 min-w-5 justify-center text-[10px]', children: String(items.length) }),
         ] }),
-        ...items.map(it =>
-        jsxs('div', {
-          onClick: () => onOpen(it.number),
-          className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start',
-          children: [
-            jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: it.author?.login, size: 24 }) }),
-            jsxs('span', {
-              className: 'min-w-0 flex-1',
+        (() => {
+          const itemRows = items.map(it => {
+            const labelSpan = Array.isArray(it.labels) && it.labels.length
+              ? jsx('span', { className: 'mt-1 flex flex-wrap gap-1 items-center', children: it.labels.map(l => jsx(LabelChip, { label: l, onClick: event => setListFilter(event, 'label', l.name) }, l.name || l.id)) })
+              : null
+            const authorBtn = it.author?.login
+              ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => setListFilter(event, 'author', it.author?.login), children: `@${it.author.login}` })
+              : '—'
+            return jsxs('div', {
+              onClick: () => onOpen(it.number),
+              className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start',
               children: [
-                jsx('button', { type: 'button', className: 'gh-row-open block w-full text-left', children: jsx(ItemTitle, { title: it.title, number: it.number }) }),
-                Array.isArray(it.labels) && it.labels.length
-                  ? jsx('span', { className: 'mt-1 flex flex-wrap gap-1 items-center', children: it.labels.map(l => jsx(LabelChip, { label: l, onClick: event => setListFilter(event, 'label', l.name) }, l.name || l.id)) })
-                  : null,
-                jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [
-                  it.author?.login ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => setListFilter(event, 'author', it.author?.login), children: `@${it.author.login}` }) : '—',
-                  ` · ${ago(it.updatedAt)}`,
-                ] }),
+                jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: it.author?.login, size: 24 }) }),
+                jsxs('span', {
+                  className: 'min-w-0 flex-1',
+                  children: [
+                    jsx('button', { type: 'button', className: 'gh-row-open block w-full text-left', children: jsx(ItemTitle, { title: it.title, number: it.number }) }),
+                    labelSpan,
+                    jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [
+                      authorBtn,
+                      ` · ${ago(it.updatedAt)}`,
+                    ] }),
+                  ],
+                }),
+                jsx(Codicon, { name: 'chevron-right', className: 'gh-card-arrow mt-1 shrink-0', 'aria-hidden': true }),
               ],
-            }),
-            jsx(Codicon, { name: 'chevron-right', className: 'gh-card-arrow mt-1 shrink-0', 'aria-hidden': true }),
-          ],
-        }, String(it.number))
-      ),
+            }, String(it.number))
+          })
+          return itemRows
+        })(),
         ListMoreFooter({ q, limit, setLimit, allItems }),
       ],
     }),
