@@ -2,3 +2,5 @@ node_modules
 .worktrees
 .serena
 .local-notes.md
+IDEA.md
+project-summary.md
