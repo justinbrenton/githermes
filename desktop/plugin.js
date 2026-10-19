@@ -1361,33 +1361,52 @@ function useAssignedPrs() {
   })
 }
 
-function useCreatedIssues() {
+// `gh search issues` takes --state open|closed only — "all" is expressed by
+// leaving the flag off. Unknown values keep the historical open default so a
+// stale stored atom can never produce an unsupported flag.
+export function issueSearchStateArg(state) {
+  const s = String(state ?? '').toLowerCase()
+  if (s === 'closed') return '--state closed'
+  if (s === 'all') return ''
+  return '--state open'
+}
+
+// Shared command builder: `filter(Boolean)` drops the absent flag instead of
+// leaving a double space in the command string.
+function issueSearchCmd(args) {
+  return [GH, 'search', 'issues', ...args].filter(Boolean).join(' ')
+}
+
+function useCreatedIssues(state) {
+  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'created-issues'],
+    queryKey: [ID, 'created-issues', state],
     queryFn: async () => {
-      const out = await sh(`${GH} search issues --author @me --state open --limit 30 --json number,title,state,author,updatedAt,url,repository`)
+      const out = await sh(issueSearchCmd(['--author', '@me', flag, '--limit', '30', '--json', 'number,title,state,author,updatedAt,url,repository']))
       try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
     },
     staleTime: 60_000,
   })
 }
-function useRecentIssues() {
+function useRecentIssues(state) {
+  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'recent-issues'],
+    queryKey: [ID, 'recent-issues', state],
     queryFn: async () => {
-      const out = await sh(`${GH} search issues --updated-desc --limit 30 --json number,title,state,author,updatedAt,url,repository`)
+      const out = await sh(issueSearchCmd([flag, '--updated-desc', '--limit', '30', '--json', 'number,title,state,author,updatedAt,url,repository']))
       try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
     },
     staleTime: 60_000,
   })
 }
 
-function useMentionedIssues() {
+function useMentionedIssues(state) {
+  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'mentioned-issues'],
+    queryKey: [ID, 'mentioned-issues', state],
     queryFn: async () => {
       try {
-        const out = await sh(`${GH} search issues --search "involves:@me" --state open --limit 5 --json number,title,state,author,updatedAt,url,repository`)
+        const out = await sh(issueSearchCmd(['--search', '"involves:@me"', flag, '--limit', '5', '--json', 'number,title,state,author,updatedAt,url,repository']))
         try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
       } catch { return [] }
     },
@@ -1420,11 +1439,12 @@ function useReadyToMergePrs() {
     },
   })
 }
-function useAssignedIssues() {
+function useAssignedIssues(state) {
+  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'assigned-issues'],
+    queryKey: [ID, 'assigned-issues', state],
     queryFn: async () => {
-      const out = await sh(`${GH} search issues --assignee @me --state open --limit 30 --json number,title,state,author,updatedAt,url,repository`)
+      const out = await sh(issueSearchCmd(['--assignee', '@me', flag, '--limit', '30', '--json', 'number,title,state,author,updatedAt,url,repository']))
       try {
         const parsed = JSON.parse(out)
         return Array.isArray(parsed) ? parsed : []
@@ -1507,16 +1527,17 @@ function InboxView({ repo }) {
 }
 
 function AllIssuesView({ repo }) {
+  const state = useValue($issueState)
   // Assigned
-  const assigned = useAssignedIssues(); const assignedList = Array.isArray(assigned.data) ? assigned.data : []
+  const assigned = useAssignedIssues(state); const assignedList = Array.isArray(assigned.data) ? assigned.data : []
   // Created
-  const created = useCreatedIssues(); const createdList = Array.isArray(created.data) ? created.data : []
+  const created = useCreatedIssues(state); const createdList = Array.isArray(created.data) ? created.data : []
   // Recent
-  const recent = useRecentIssues(); const recentList = Array.isArray(recent.data) ? recent.data : []
+  const recent = useRecentIssues(state); const recentList = Array.isArray(recent.data) ? recent.data : []
   const subClass = 'text-[11px] text-(--ui-text-tertiary) leading-4 mt-0.5'
   const countClass = 'text-[13px] font-semibold text-(--ui-text-secondary) tabular-nums shrink-0 w-6 text-right'
   const sectionClass = 'mb-5'
-  const mentioned = useMentionedIssues(); const mentionedList = Array.isArray(mentioned.data) ? mentioned.data : []
+  const mentioned = useMentionedIssues(state); const mentionedList = Array.isArray(mentioned.data) ? mentioned.data : []
   return jsx(ScrollArea, {
     className: 'h-full',
     children: jsx('div', { className: 'gh-list', children: [
@@ -3957,7 +3978,8 @@ function GitHubPane() {
                 onChange: value => $listQuery.set(value),
                 inputRef: keyboard.searchRef,
               }),
-              jsx(StateSelect, { kind: tab }),
+              // Same rule as the page: state has no meaning on the inbox tab.
+              tab === 'inbox' ? null : jsx(StateSelect, { kind: tab === 'prs' ? 'prs' : 'issues' }),
             ],
           }),
         ],
@@ -4030,7 +4052,9 @@ function GithubPage() {
                     onChange: value => $listQuery.set(value),
                     inputRef: keyboard.searchRef,
                   }),
-                  jsx(StateSelect, { kind: tab }),
+                  // Inbox is open-only by definition (review requests, drafts,
+                  // ready-to-merge) — a state control there would be inert.
+                  tab === 'inbox' ? null : jsx(StateSelect, { kind: tab === 'prs' ? 'prs' : 'issues' }),
                 ],
               }),
             ],
