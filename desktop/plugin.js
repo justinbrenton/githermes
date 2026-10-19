@@ -2896,50 +2896,53 @@ function PrList({ repo, onOpen, query, active = true }) {
       : jsx(ListEmptyState, { kind: 'prs', state, repo, query: allItems.length ? query : '' })
   }
   return jsx(ScrollArea, {
-    className: 'h-full',
-    children: jsx('div', {
-      className: 'gh-list',
-      children: [
-        jsxs('div', { className: 'gh-list-heading flex items-center gap-1.5 px-1 py-0.5 text-[10px] font-semibold', children: [
-          jsx(Codicon, { name: 'git-pull-request' }),
-          jsx('span', { children: 'Pull requests' }),
-          jsx('span', { className: 'font-normal text-(--ui-text-quaternary)', children: `Showing latest ${allItems.length}` }),
-          jsx(Badge, { variant: 'secondary', className: 'ml-auto h-5 min-w-5 justify-center text-[10px]', children: String(items.length) }),
-        ] }),
-        ...items.map(pr =>
-        jsxs('div', {
-          onClick: () => onOpen(pr.number),
-          className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start',
-          children: [
-            jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: pr.author?.login, size: 24 }) }),
-            jsxs('span', {
-              className: 'min-w-0 flex-1',
-              children: [
-                jsxs('button', { type: 'button', className: 'gh-row-open flex w-full items-center gap-1.5 text-left', children: [
-                  // State indicator reuses the detail pill's table (icon + color +
-                  // tooltip label), so open/draft/merged/closed read at a glance.
-                  jsx(Codicon, { name: (STATE_PILL[prStateKey(pr)] || STATE_PILL.open).icon, size: 14, style: { color: (STATE_PILL[prStateKey(pr)] || STATE_PILL.open).bg }, title: (STATE_PILL[prStateKey(pr)] || STATE_PILL.open).label, className: 'shrink-0' }),
-                  jsx(ItemTitle, { title: pr.title, number: pr.number }),
-                ] }),
-                jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
-                  pr.author?.login ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => setListFilter(event, 'author', pr.author?.login), children: `@${pr.author.login}` }) : null,
-                  ...(Array.isArray(pr.labels) ? pr.labels.map(l => jsx(LabelChip, { label: l, onClick: event => setListFilter(event, 'label', l.name) }, l.name || l.id)) : []),
-                  jsx('span', { className: 'rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', children: pr.headRefName || '—' }),
-                  jsx(DiffCount, { add: pr.additions, del: pr.deletions }),
-                  jsx('span', { children: `${pr.changedFiles ?? 0} files` }),
-                  jsx('span', { className: 'text-(--ui-text-quaternary)', children: ago(pr.updatedAt) }),
-                  jsx(StatusDots, { pr }),
-                ] }),
-              ],
-            }),
-            jsx(Codicon, { name: 'chevron-right', className: 'gh-card-arrow mt-1 shrink-0', 'aria-hidden': true }),
-          ],
-        }, String(pr.number))
-      ),
-        ListMoreFooter({ q, limit, setLimit, allItems }),
-      ],
-    }),
-  })
+      className: 'h-full',
+      children: jsx('div', {
+        className: 'gh-list',
+        children: [
+          jsxs('div', { className: 'gh-list-heading flex items-center gap-1.5 px-1 py-0.5 text-[10px] font-semibold', children: [
+            jsx(Codicon, { name: 'git-pull-request' }),
+            jsx('span', { children: 'Pull requests' }),
+            jsx('span', { className: 'font-normal text-(--ui-text-quaternary)', children: `Showing latest ${allItems.length}` }),
+            jsx(Badge, { variant: 'secondary', className: 'ml-auto h-5 min-w-5 justify-center text-[10px]', children: String(items.length) }),
+          ] }),
+          (() => {
+            const prRows = items.map(pr => {
+              const labelChips = Array.isArray(pr.labels) ? pr.labels.map(l => jsx(LabelChip, { label: l, onClick: event => setListFilter(event, 'label', l.name) }, l.name || l.id)) : []
+              const authorBtn = pr.author?.login ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => setListFilter(event, 'author', pr.author?.login), children: `@${pr.author.login}` }) : null
+              return jsxs('div', {
+                onClick: () => onOpen(pr.number),
+                className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start',
+                children: [
+                  jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: pr.author?.login, size: 24 }) }),
+                  jsxs('span', {
+                    className: 'min-w-0 flex-1',
+                    children: [
+                      jsxs('button', { type: 'button', className: 'gh-row-open flex w-full items-center gap-1.5 text-left', children: [
+                        jsx(Codicon, { name: (STATE_PILL[prStateKey(pr)] || STATE_PILL.open).icon, size: 14, style: { color: (STATE_PILL[prStateKey(pr)] || STATE_PILL.open).bg }, title: (STATE_PILL[prStateKey(pr)] || STATE_PILL.open).label, className: 'shrink-0' }),
+                        jsx(ItemTitle, { title: pr.title, number: pr.number }),
+                      ] }),
+                      jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
+                        authorBtn,
+                        ...labelChips,
+                        jsx('span', { className: 'rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', children: pr.headRefName || '—' }),
+                        jsx(DiffCount, { add: pr.additions, del: pr.deletions }),
+                        jsx('span', { children: `${pr.changedFiles ?? 0} files` }),
+                        jsx('span', { className: 'text-(--ui-text-quaternary)', children: ago(pr.updatedAt) }),
+                        jsx(StatusDots, { pr }),
+                      ] }),
+                    ],
+                  }),
+                  jsx(Codicon, { name: 'chevron-right', className: 'gh-card-arrow mt-1 shrink-0', 'aria-hidden': true }),
+                ],
+              }, String(pr.number))
+            })
+            return prRows
+          })(),
+          ListMoreFooter({ q, limit, setLimit, allItems }),
+        ],
+      }),
+    })
 }
 
 function IssueList({ repo, onOpen, query, active = true }) {
@@ -2980,43 +2983,50 @@ function IssueList({ repo, onOpen, query, active = true }) {
       : jsx(ListEmptyState, { kind: 'issues', state, repo, query: allItems.length ? query : '' })
   }
   return jsx(ScrollArea, {
-    className: 'h-full',
-    children: jsx('div', {
-      className: 'gh-list',
-      children: [
-        jsxs('div', { className: 'gh-list-heading flex items-center gap-1.5 px-1 py-0.5 text-[10px] font-semibold', children: [
-          jsx(Codicon, { name: 'issues' }),
-          jsx('span', { children: 'Issues' }),
-          jsx('span', { className: 'font-normal text-(--ui-text-quaternary)', children: `Showing latest ${allItems.length}` }),
-          jsx(Badge, { variant: 'secondary', className: 'ml-auto h-5 min-w-5 justify-center text-[10px]', children: String(items.length) }),
-        ] }),
-        ...items.map(it =>
-        jsxs('div', {
-          onClick: () => onOpen(it.number),
-          className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start',
-          children: [
-            jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: it.author?.login, size: 24 }) }),
-            jsxs('span', {
-              className: 'min-w-0 flex-1',
-              children: [
-                jsx('button', { type: 'button', className: 'gh-row-open block w-full text-left', children: jsx(ItemTitle, { title: it.title, number: it.number }) }),
-                Array.isArray(it.labels) && it.labels.length
-                  ? jsx('span', { className: 'mt-1 flex flex-wrap gap-1 items-center', children: it.labels.map(l => jsx(LabelChip, { label: l, onClick: event => setListFilter(event, 'label', l.name) }, l.name || l.id)) })
-                  : null,
-                jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [
-                  it.author?.login ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => setListFilter(event, 'author', it.author?.login), children: `@${it.author.login}` }) : '—',
-                  ` · ${ago(it.updatedAt)}`,
-                ] }),
-              ],
-            }),
-            jsx(Codicon, { name: 'chevron-right', className: 'gh-card-arrow mt-1 shrink-0', 'aria-hidden': true }),
-          ],
-        }, String(it.number))
-      ),
-        ListMoreFooter({ q, limit, setLimit, allItems }),
-      ],
-    }),
-  })
+      className: 'h-full',
+      children: jsx('div', {
+        className: 'gh-list',
+        children: [
+          jsxs('div', { className: 'gh-list-heading flex items-center gap-1.5 px-1 py-0.5 text-[10px] font-semibold', children: [
+            jsx(Codicon, { name: 'issues' }),
+            jsx('span', { children: 'Issues' }),
+            jsx('span', { className: 'font-normal text-(--ui-text-quaternary)', children: `Showing latest ${allItems.length}` }),
+            jsx(Badge, { variant: 'secondary', className: 'ml-auto h-5 min-w-5 justify-center text-[10px]', children: String(items.length) }),
+          ] }),
+          (() => {
+            const issueRows = items.map(it => {
+              const labelSpan = Array.isArray(it.labels) && it.labels.length
+                ? jsx('span', { className: 'mt-1 flex flex-wrap gap-1 items-center', children: it.labels.map(l => jsx(LabelChip, { label: l, onClick: event => setListFilter(event, 'label', l.name) }, l.name || l.id)) })
+                : null
+              const authorBtn = it.author?.login
+                ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => setListFilter(event, 'author', it.author?.login), children: `@${it.author.login}` })
+                : '—'
+              return jsxs('div', {
+                onClick: () => onOpen(it.number),
+                className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start',
+                children: [
+                  jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: it.author?.login, size: 24 }) }),
+                  jsxs('span', {
+                    className: 'min-w-0 flex-1',
+                    children: [
+                      jsx('button', { type: 'button', className: 'gh-row-open block w-full text-left', children: jsx(ItemTitle, { title: it.title, number: it.number }) }),
+                      labelSpan,
+                      jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [
+                        authorBtn,
+                        ` · ${ago(it.updatedAt)}`,
+                      ] }),
+                    ],
+                  }),
+                  jsx(Codicon, { name: 'chevron-right', className: 'gh-card-arrow mt-1 shrink-0', 'aria-hidden': true }),
+                ],
+              }, String(it.number))
+            })
+            return issueRows
+          })(),
+          ListMoreFooter({ q, limit, setLimit, allItems }),
+        ],
+      }),
+    })
 }
 
 function AssignToBot({ kind, repo, number }) {
