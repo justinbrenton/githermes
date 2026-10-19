@@ -1,0 +1,42 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # The plugin imports @hermes/plugin-sdk, which only exists inside the
+      # desktop runtime. Stubs give node --test something to resolve; they are
+      # gitignored and never shipped.
+      - name: Bootstrap SDK stubs
+        run: npm run bootstrap
+
+      - name: Syntax check
+        run: node --check desktop/plugin.js
+
+      - name: Test
+        run: npm test
