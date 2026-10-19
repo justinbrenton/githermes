@@ -3,7 +3,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { paneTogglePlan } from '../desktop/plugin.js'
 
-const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
+// Normalise line endings: assertions below match `{\n` shapes, and a Windows
+// checkout (core.autocrlf) hands us CRLF. The plugin is LF in every other
+// environment, so without this the same source passes on one machine and fails
+// on another.
+const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 test('Issue #26: pane and page share one repository-selection shell', () => {
   assert.ok(source.includes('function useGitHubShellState()'), 'shared shell hook is missing')
