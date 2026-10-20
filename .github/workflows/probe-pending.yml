@@ -1,0 +1,12 @@
+name: probe-pending
+
+on: [pull_request, workflow_dispatch]
+
+jobs:
+  hold:
+    name: hold check open
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Sleep so the check stays pending
+        run: sleep 900
