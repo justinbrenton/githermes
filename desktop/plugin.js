@@ -1725,18 +1725,23 @@ function SectionHeader({ icon, title, count, collapsed, onToggle, trailing }) {
 
 function AllIssuesView({ repo }) {
   const state = useValue($issueState)
+  const query = useValue($listQuery)
   const [collapsed, toggleSection] = useCollapsedSections()
   const assignedQ = useAssignedIssues(state)
   const createdQ = useCreatedIssues(state)
   const recentQ = useRecentIssues(state)
   const mentionedQ = useMentionedIssues(state)
   const listOf = q => (Array.isArray(q.data) ? q.data : [])
-  const assignedList = listOf(assignedQ)
-  const createdList = listOf(createdQ)
-  const recentList = listOf(recentQ)
-  const mentionedList = listOf(mentionedQ)
+  const allAssigned = listOf(assignedQ)
+  const allCreated = listOf(createdQ)
+  const allRecent = listOf(recentQ)
+  const allMentioned = listOf(mentionedQ)
+  const assignedList = filterInboxList(allAssigned, query)
+  const createdList = filterInboxList(allCreated, query)
+  const recentList = filterInboxList(allRecent, query)
+  const mentionedList = filterInboxList(allMentioned, query)
   const subClass = 'text-[11px] text-(--ui-text-tertiary) leading-4 mt-0.5'
-  const total = new Set([...assignedList, ...createdList, ...recentList, ...mentionedList]
+  const total = new Set([...allAssigned, ...allCreated, ...allRecent, ...allMentioned]
     .map(it => `${it?.repository?.nameWithOwner || repo || ''}#${it?.number ?? ''}`)).size
 
   const issueRow = it => {
