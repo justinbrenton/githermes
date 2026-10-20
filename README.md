@@ -64,9 +64,10 @@ Commits and the issue list:
 
 | Feature | What it does |
 | --- | --- |
-| Inbox tab | Sorts your own PR work into six live sections: needs your review, needs your team's review, your drafts, waiting on review or checks, needs action, ready to merge. Each section carries a count and opens PRs like the list view |
-| All Issues tab | Assigned to you, created by you, recently updated, and mentioned, each honouring the Open / Closed / All filter |
+| Inbox tab | Sorts your own PR work into six live sections: needs your review, needs your team's review, your drafts, waiting on review or checks, needs action, ready to merge. Each section carries a count, opens PRs like the list view, and collapses on demand |
+| All Issues tab | Assigned to you, created by you, recently updated, and mentioned, each honouring the Open / Closed / All filter. Cards match the Issues list: author avatar, labels, repo and age |
 | Empty states | When a list is empty it says why and offers the next step: clear the search, show all items, switch item type, or open the repo on GitHub |
+| Collapsible sections | Every section in Inbox and All Issues opens and closes from its header. The state is saved, so a section you hide stays hidden after a restart |
 | Refresh indicator | Shows `Updated 2m ago` on a clock icon, and a spinner with `Updating...` while a fetch runs, so a slow query never looks like a stalled one |
 | Windows cold start | `bash.exe` discovery retries and caches its result, so the first `gh` call after a reboot works |
 
@@ -144,12 +145,14 @@ Open the pane from the GitHub entry in the sidebar, or run `Open GitHub pane` in
 | --- | --- |
 | PRs | Every open pull request in the repository, filterable by Open / Closed / All |
 | Issues | The repository's issues, same filter |
-| Inbox | Your own PR work, grouped by what it needs from you |
-| All Issues | Issues assigned to you, created by you, recently updated, or mentioning you |
+| Inbox | Your own PR work, grouped by what it needs from you, in collapsible sections |
+| All Issues | Issues assigned to you, created by you, recently updated, or mentioning you, in collapsible sections |
 
-Search does three things. `#214` jumps straight to that item and never matches `#1214`. `author:octocat` and `label:bug` narrow the list, and quoted values work when the value has a space. Anything else filters on number, title, author, branch or label.
+Search applies to all four tabs, including the sections inside Inbox and All Issues. `#214` jumps straight to that item and never matches `#1214`. `author:octocat` and `label:bug` narrow the list, and quoted values work when the value has a space. Anything else filters on number, title, author, branch or label.
 
 Keyboard shortcuts are few and predictable: `/` puts the cursor in the search box, `Escape` clears the query, and `Enter` opens the result when the search has narrowed the list to one row.
+
+In Inbox and All Issues each section header is a button: the caret on the left collapses that section, whether it has rows or not. The choice is written to plugin storage and survives a reload, which keeps a quiet section from taking up space all day.
 
 Merging happens in the pane. Open a pull request, use the Merge action, choose squash, merge or rebase, and optionally delete the branch. The confirmation panel shows what will happen before it does.
 
