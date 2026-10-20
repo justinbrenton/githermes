@@ -1424,6 +1424,15 @@ export function myOpenPrListCmd(repo) {
   return `${GH} pr list --repo ${sq(repo)} --author @me --state open --limit 30 --json ${PR_LIST_FIELDS}`
 }
 
+// The Inbox honours the pane's search box the same way the PR and Issue lists
+// do: `#N`, `author:`, `label:` or free text.
+export function filterInboxList(list, query) {
+  const items = Array.isArray(list) ? list : []
+  const text = String(query || '').trim()
+  if (!text) return items
+  return items.filter(item => matchesListQuery(item, text))
+}
+
 // A PR can be requested from you personally and from one of your teams. The
 // team section shows only rows the personal section does not already list.
 export function withoutDuplicates(list, exclude) {
@@ -1610,13 +1619,23 @@ function useAssignedIssues(state) {
 }
 
 function InboxView({ repo }) {
+  const query = useValue($listQuery)
   const listOf = q => (Array.isArray(q.data) ? q.data : [])
-  const reviewList = listOf(useReviewRequestedPrs())
-  const teamList = withoutDuplicates(listOf(useTeamReviewRequestedPrs()), reviewList)
-  const draftList = listOf(useDraftPrs())
-  const waitingList = listOf(useWaitingOnPrs())
-  const needsActionList = listOf(useNeedsActionPrs())
-  const readyMergeList = listOf(useReadyToMergePrs())
+  const matches = list => filterInboxList(list, query)
+
+  const reviewQ = useReviewRequestedPrs()
+  const teamQ = useTeamReviewRequestedPrs()
+  const draftQ = useDraftPrs()
+  const waitingQ = useWaitingOnPrs()
+  const needsActionQ = useNeedsActionPrs()
+  const readyMergeQ = useReadyToMergePrs()
+
+  const reviewList = matches(listOf(reviewQ))
+  const teamList = matches(withoutDuplicates(listOf(teamQ), listOf(reviewQ)))
+  const draftList = matches(listOf(draftQ))
+  const waitingList = matches(listOf(waitingQ))
+  const needsActionList = matches(listOf(needsActionQ))
+  const readyMergeList = matches(listOf(readyMergeQ))
 
   const sectionClass = 'mb-5 pb-4 border-b border-(--ui-stroke-secondary) last:border-0 last:pb-0'
   const subClass = 'text-[11px] text-(--ui-text-tertiary) leading-4 mt-0.5'
@@ -1650,24 +1669,28 @@ function InboxView({ repo }) {
     })
   }
 
-  const section = (icon, title, list, emptyText) => jsxs('section', {
+  const section = (icon, title, q, list, emptyText) => jsxs('section', {
     className: sectionClass,
     children: [
       jsxs('div', { className: 'flex items-baseline gap-2 px-2 mb-1', children: [
         jsx('h3', { className: 'gh-list-heading text-[10px] font-semibold uppercase tracking-wide', children: [jsx(Codicon, { name: icon, size: 12 }), '  ', title] }),
         jsx('span', { className: countClass, children: String(list.length) }),
       ] }),
-      list.length ? list.map(prRow) : jsx('p', { className: subClass + ' px-2 italic', children: emptyText }),
+      list.length
+        ? list.map(prRow)
+        : q.isLoading && !q.data
+          ? jsx('p', { className: subClass + ' px-2', children: 'Loading…' })
+          : jsx('p', { className: subClass + ' px-2 italic', children: emptyText }),
     ],
   })
 
   return jsx(ScrollArea, { className: 'h-full', children: jsx('div', { className: 'gh-list', children: [
-    section('eye', 'Needs your review', reviewList, 'Nothing is waiting on your review.'),
-    section('git-pull-request', "Needs your team's review", teamList, 'Nothing is waiting on a team review.'),
-    section('git-pull-request-draft', 'Your drafts', draftList, 'You have no open drafts.'),
-    section('clock', 'Waiting for review or checks', waitingList, 'Nothing of yours is waiting on a reviewer or a check.'),
-    section('warning', 'Needs action', needsActionList, 'No PRs need action right now.'),
-    section('git-merge', 'Ready to merge', readyMergeList, 'No PRs are ready to merge.'),
+    section('eye', 'Needs your review', reviewQ, reviewList, 'Nothing is waiting on your review.'),
+    section('git-pull-request', "Needs your team's review", teamQ, teamList, 'Nothing is waiting on a team review.'),
+    section('git-pull-request-draft', 'Your drafts', draftQ, draftList, 'You have no open drafts.'),
+    section('clock', 'Waiting for review or checks', waitingQ, waitingList, 'Nothing of yours is waiting on a reviewer or a check.'),
+    section('warning', 'Needs action', needsActionQ, needsActionList, 'No PRs need action right now.'),
+    section('git-merge', 'Ready to merge', readyMergeQ, readyMergeList, 'No PRs are ready to merge.'),
   ] }) })
 }
 

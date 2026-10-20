@@ -14,6 +14,7 @@ import {
   authoredOpenPrListCmd,
   myOpenPrListCmd,
   withoutDuplicates,
+  filterInboxList,
 } from '../desktop/plugin.js'
 
 const pr = (over = {}) => ({
@@ -142,6 +143,21 @@ test('the team section drops rows the personal section already shows', () => {
   assert.deepEqual(withoutDuplicates([shared, teamOnly], [personalOnly, shared]).map(p => p.number), [8])
   assert.deepEqual(withoutDuplicates(null, [shared]), [])
   assert.deepEqual(withoutDuplicates([teamOnly], null).map(p => p.number), [8])
+})
+
+test('the Inbox honours the search box, exact numbers included', () => {
+  const rows = [
+    { number: 12, title: 'Bump actions', author: { login: 'octocat' }, labels: [{ name: 'chore' }] },
+    { number: 112, title: 'Fix picker', author: { login: 'hubot' }, labels: [{ name: 'bug' }] },
+    { number: 9, title: 'Add palette', author: { login: 'octocat' }, labels: [] },
+  ]
+  assert.deepEqual(filterInboxList(rows, '').map(r => r.number), [12, 112, 9])
+  assert.deepEqual(filterInboxList(rows, '#12').map(r => r.number), [12])
+  assert.deepEqual(filterInboxList(rows, '#112').map(r => r.number), [112])
+  assert.deepEqual(filterInboxList(rows, 'author:octocat').map(r => r.number), [12, 9])
+  assert.deepEqual(filterInboxList(rows, 'label:bug').map(r => r.number), [112])
+  assert.deepEqual(filterInboxList(rows, 'palette').map(r => r.number), [9])
+  assert.deepEqual(filterInboxList(null, '#1'), [])
 })
 
 test('parseTeamSlugs survives empty and malformed output', () => {
