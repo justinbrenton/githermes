@@ -23,17 +23,14 @@ test('shell: every shell.exec goes through requestShell and the shellCommand wra
   // One raw `host.request('shell.exec', ...)` is allowed, inside requestShell,
   // where invalid_params is translated. Every other call must wrap the command
   // in shellCommand (the Windows bash hop) and carry the session id.
-  const wrapped = source.match(/requestShell\(sessionShellParams\(/g) || []
-  assert.ok(wrapped.length >= 4, `expected at least 4 wrapped call sites, found ${wrapped.length}`)
+  const wrapped = source.match(/requestShell\(await shellCommand\(/g) || []
+  assert.ok(wrapped.length >= 2, `expected the gh callers to route through shellCommand, found ${wrapped.length}`)
   assert.equal(
     (source.match(/host\.request\('shell\.exec'/g) || []).length,
     2,
-    'expected the banner comment plus exactly one raw call inside requestShell',
+    'expected the banner comment plus exactly one raw call inside attemptShell',
   )
-  assert.ok(
-    source.includes('requestShell(sessionShellParams(await shellCommand(cmd), currentSessionId()))'),
-    'gh invocations must run through shellCommand and carry the session id',
-  )
+  assert.ok(source.includes('sessionModeForError'), 'session_id support must be negotiated with the backend')
   // cmd.exe parses the whole command string (no \" handling; |>&^% are live), so user
   // text may only cross it as base64; bash decodes to a $$-unique script and runs it.
   assert.ok(!source.includes('echo ${cmd}'), 'raw command text must not cross cmd.exe')
@@ -48,7 +45,7 @@ test('shell: Windows routes through Git bash, not WSL bash', () => {
   // against a different filesystem with no `gh` on PATH. Resolve bash from the
   // installed Git instead of trusting PATH.
   assert.ok(source.includes('function resolveBash'), 'resolveBash is missing')
-  assert.ok(source.includes("sessionShellParams('where git'"), 'bash must be derived from the git install')
+  assert.ok(source.includes("requestShell('where git')"), 'bash must be derived from the git install')
   assert.ok(source.includes('(?:cmd|mingw64\\/bin|usr\\/bin)'), 'all Git-for-Windows install layouts must resolve')
   assert.ok(source.includes('bash.exe'), 'expected Git-for-Windows bash candidates')
   assert.ok(source.includes('bashProbeCommand'), 'the probe must be built by one helper')

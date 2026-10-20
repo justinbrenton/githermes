@@ -622,12 +622,46 @@ export function bashProbeCommand(candidate) {
   return `if exist "${candidate}" echo FOUND`
 }
 
-async function requestShell(params) {
+// Hermes 0.22.1+ serves shell.exec on the session authority and requires
+// `session_id`; older builds reject the field outright as an extra input. Start
+// with the legacy shape and adopt whichever the backend asks for, so one plugin
+// build works across versions and heals itself after an upgrade.
+let shellSessionMode = null // null = legacy shape, true = send session_id
+
+export function sessionModeForError(message) {
+  const text = String(message || '')
+  if (!/session_id/i.test(text)) return null
+  if (/extra inputs|not permitted|unexpected|unknown field/i.test(text)) return false
+  if (/required|missing|invalid_params/i.test(text)) return true
+  return null
+}
+
+async function attemptShell(command, withSession) {
+  return host.request('shell.exec', shellShellParamsFor(command, withSession))
+}
+
+function shellShellParamsFor(command, withSession) {
+  return sessionShellParams(command, withSession ? currentSessionId() : null)
+}
+
+async function requestShell(command) {
+  if (shellSessionMode === true) {
+    try {
+      return await attemptShell(command, true)
+    } catch (error) {
+      if (sessionModeForError(error?.message || error) === false) {
+        shellSessionMode = false
+        return attemptShell(command, false)
+      }
+      throw error
+    }
+  }
   try {
-    return await host.request('shell.exec', params)
+    return await attemptShell(command, false)
   } catch (error) {
-    if (/invalid_params/i.test(String(error?.message || error || ''))) {
-      throw new Error('Hermes needs an open chat session to run shell commands. Open or start a chat, then Retry.')
+    if (sessionModeForError(error?.message || error) === true) {
+      shellSessionMode = true
+      return attemptShell(command, true)
     }
     throw error
   }
@@ -647,7 +681,7 @@ function resolveBash() {
     } catch { saved = null }
     if (saved) {
       try {
-        const probe = await requestShell(sessionShellParams(bashProbeCommand(saved), currentSessionId()))
+        const probe = await requestShell(bashProbeCommand(saved))
         if (String(probe?.stdout || '').includes('FOUND')) {
           bashPath = saved
           return
@@ -657,14 +691,14 @@ function resolveBash() {
     }
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const r = await requestShell(sessionShellParams('where git', currentSessionId()))
+        const r = await requestShell('where git')
         const git = (r.stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0]
         if (!git) continue
         const normalizedGit = git.replace(/\\/g, '/')
         const m = normalizedGit.match(/^(.*)\/(?:cmd|mingw64\/bin|usr\/bin)\/[^/]+$/i)
         const root = m ? m[1] : normalizedGit.replace(/\/[^/]+$/, '')
         for (const candidate of [`${root}\\bin\\bash.exe`, `${root}\\usr\\bin\\bash.exe`]) {
-          const probe = await requestShell(sessionShellParams(bashProbeCommand(candidate), currentSessionId()))
+          const probe = await requestShell(bashProbeCommand(candidate))
           if (String(probe?.stdout || '').includes('FOUND')) {
             bashPath = candidate
             try { localStorage.setItem('githermes.bashPath', bashPath.replace(/\//g, '\\')) } catch {}
@@ -698,7 +732,7 @@ async function shellCommand(cmd) {
 }
 
 async function sh(cmd) {
-  const r = await requestShell(sessionShellParams(await shellCommand(cmd), currentSessionId()))
+  const r = await requestShell(await shellCommand(cmd))
   if (r.code !== 0) throw new Error((r.stderr || r.stdout || `exit ${r.code}`).trim().slice(0, 600))
   return (r.stdout || '').trim()
 }
@@ -940,7 +974,7 @@ async function fetchIssueByNumber(repo, n) {
 }
 
 async function shJsonLoose(cmd) {
-  const r = await requestShell(sessionShellParams(await shellCommand(cmd), currentSessionId()))
+  const r = await requestShell(await shellCommand(cmd))
   const out = (r.stdout || '').trim()
   if (!out) {
     if (r.code !== 0) throw new Error((r.stderr || `exit ${r.code}`).trim().slice(0, 400))

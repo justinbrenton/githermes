@@ -5,6 +5,7 @@ import {
   bashProbeCommand,
   pickSessionId,
   sessionShellParams,
+  sessionModeForError,
 } from '../desktop/plugin.js'
 
 const source = readFileSync('desktop/plugin.js', 'utf8')
@@ -34,13 +35,23 @@ test('shell.exec params carry session_id only when one exists', () => {
   assert.equal(Object.hasOwn(sessionShellParams('echo hi', null), 'session_id'), false)
 })
 
-test('every shell.exec call site goes through sessionShellParams', () => {
-  const callSites = source.match(/requestShell\(sessionShellParams\(/g) || []
-  assert.ok(callSites.length >= 4, `expected at least 4 wrapped call sites, found ${callSites.length}`)
-  // One raw call is allowed, inside requestShell, which is where the error is
-  // translated. Any other raw call would skip the session_id.
-  const raw = (source.match(/host\.request\('shell\.exec'/g) || []).length
-  assert.equal(raw, 2, `expected 1 raw call plus the banner comment, found ${raw}`)
+test('every shell.exec call site goes through requestShell', () => {
+  const callSites = source.match(/requestShell\(/g) || []
+  assert.ok(callSites.length >= 6, `expected the helper plus five call sites, found ${callSites.length}`)
+  assert.equal(
+    (source.match(/host\.request\('shell\.exec'/g) || []).length,
+    2,
+    'expected the banner comment plus exactly one raw call inside attemptShell',
+  )
+  assert.ok(source.includes('sessionShellParams(command, withSession'), 'the helper is the only place params are built')
+})
+
+test('a backend that rejects or demands session_id is detected from its error', () => {
+  // Hermes 0.22.1+ answers invalid_params for a missing session_id.
+  assert.equal(sessionModeForError('invalid_params for shell.exec: session_id: field required'), true)
+  // Older builds answer the other way round, which is what this machine did.
+  assert.equal(sessionModeForError('invalid params for shell.exec: session_id: Extra inputs are not permitted'), false)
+  assert.equal(sessionModeForError('Could not read from remote repository'), null)
 })
 
 test('a failed resolution is not cached', () => {
