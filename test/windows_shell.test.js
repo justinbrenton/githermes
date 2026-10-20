@@ -15,22 +15,25 @@ test('shell: every gh/hermes invocation resolves the binary per platform', () =>
   assert.ok(!source.includes("const GH = 'PATH="), 'GH must not hardcode a POSIX PATH prefix')
   assert.ok(!source.includes("const HERMES = 'PATH="), 'HERMES must not hardcode a POSIX PATH prefix')
   assert.ok(source.includes('const POSIX_SHELL ='), 'platform detection is missing')
-  assert.ok(source.includes('${POSIX_SHELL ? POSIX_PATH : \'\'}gh'), 'GH must be platform-gated')
-  assert.ok(source.includes('${POSIX_SHELL ? POSIX_PATH : \'\'}hermes'), 'HERMES must be platform-gated')
+  assert.ok(source.includes("${POSIX_SHELL ? POSIX_PATH : ''}gh"), 'GH must be platform-gated')
+  assert.ok(source.includes("${POSIX_SHELL ? POSIX_PATH : ''}hermes"), 'HERMES must be platform-gated')
 })
 
-test('shell: every shell.exec goes through the shellCommand wrapper', () => {
-  // A raw `host.request('shell.exec', { command: cmd })` call site bypasses the
-  // Windows bash hop and reintroduces the cmd.exe bug for that one query.
-  const calls = source.match(/host\.request\('shell\.exec', \{ command: [^}]*\}/g) || []
-  assert.ok(calls.length >= 4, 'expected the wrapper callers, the where-git probe and the bash probe')
-  for (const call of calls) {
-    const ok =
-      call.includes('shellCommand(') ||
-      call.includes("'where git'") ||
-      call.includes('if exist')
-    assert.ok(ok, `unwrapped shell.exec call site: ${call}`)
-  }
+test('shell: every shell.exec goes through requestShell and the shellCommand wrapper', () => {
+  // One raw `host.request('shell.exec', ...)` is allowed, inside requestShell,
+  // where invalid_params is translated. Every other call must wrap the command
+  // in shellCommand (the Windows bash hop) and carry the session id.
+  const wrapped = source.match(/requestShell\(sessionShellParams\(/g) || []
+  assert.ok(wrapped.length >= 4, `expected at least 4 wrapped call sites, found ${wrapped.length}`)
+  assert.equal(
+    (source.match(/host\.request\('shell\.exec'/g) || []).length,
+    2,
+    'expected the banner comment plus exactly one raw call inside requestShell',
+  )
+  assert.ok(
+    source.includes('requestShell(sessionShellParams(await shellCommand(cmd), currentSessionId()))'),
+    'gh invocations must run through shellCommand and carry the session id',
+  )
   // cmd.exe parses the whole command string (no \" handling; |>&^% are live), so user
   // text may only cross it as base64; bash decodes to a $$-unique script and runs it.
   assert.ok(!source.includes('echo ${cmd}'), 'raw command text must not cross cmd.exe')
@@ -45,16 +48,16 @@ test('shell: Windows routes through Git bash, not WSL bash', () => {
   // against a different filesystem with no `gh` on PATH. Resolve bash from the
   // installed Git instead of trusting PATH.
   assert.ok(source.includes('function resolveBash'), 'resolveBash is missing')
-  assert.ok(source.includes('command: \'where git\''), 'bash must be derived from the git install')
-  assert.ok(source.includes("git.replace(/\\\\/g, '/')"), 'Windows paths must be normalized before parsing')
+  assert.ok(source.includes("sessionShellParams('where git'"), 'bash must be derived from the git install')
   assert.ok(source.includes('(?:cmd|mingw64\\/bin|usr\\/bin)'), 'all Git-for-Windows install layouts must resolve')
-  assert.ok(source.includes('bin\\\\bash.exe'), 'expected Git-for-Windows bash candidates')
+  assert.ok(source.includes('bash.exe'), 'expected Git-for-Windows bash candidates')
+  assert.ok(source.includes('bashProbeCommand'), 'the probe must be built by one helper')
   assert.ok(!/const BASH = '[A-Z]:/.test(source), 'bash path must not be hardcoded to a drive letter')
   // The first command must wait for the Git-for-Windows probe; it must never
   // race into bare `bash` and accidentally launch System32's WSL shim.
   assert.ok(source.includes('let bashReady = null'), 'bash resolution must be shared')
   assert.ok(source.includes('await resolveBash()'), 'shell commands must await bash resolution')
-  assert.ok(source.includes("Git for Windows bash.exe was not found"), 'missing Git Bash needs a clear recovery error')
+  assert.ok(source.includes('Git for Windows bash.exe was not found'), 'missing Git Bash needs a clear recovery error')
 })
 
 test('shell: bash is resolved once at registration', () => {

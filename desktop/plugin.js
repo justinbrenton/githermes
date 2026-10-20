@@ -599,32 +599,75 @@ function sendCommentToChat(c) {
 let bashPath = null
 let bashReady = null
 
+export function pickSessionId(focused, active) {
+  return focused || active || null
+}
+
+// `shell.exec` is served by the session authority on Hermes 0.22.1+, which
+// rejects a call without `session_id` as `invalid_params`. Older gateways never
+// learned the field, so it is only sent when a session actually exists.
+function currentSessionId() {
+  const st = host.state || {}
+  const read = value => (value && typeof value.get === 'function' ? value.get() : value)
+  return pickSessionId(read(st.focusedSessionId), read(st.activeSessionId))
+}
+
+export function sessionShellParams(command, sessionId) {
+  return sessionId ? { command, session_id: sessionId } : { command }
+}
+
+// cmd.exe strips only the outer pair of quotes from `cmd /c "<command>"`, so a
+// path with a space has to keep its own quotes or the probe never matches.
+export function bashProbeCommand(candidate) {
+  return `if exist "${candidate}" echo FOUND`
+}
+
+async function requestShell(params) {
+  try {
+    return await host.request('shell.exec', params)
+  } catch (error) {
+    if (/invalid_params/i.test(String(error?.message || error || ''))) {
+      throw new Error('Hermes needs an open chat session to run shell commands. Open or start a chat, then Retry.')
+    }
+    throw error
+  }
+}
+
 /** Resolve Git for Windows' bash once. No-op on POSIX, where commands run as-is. */
 function resolveBash() {
   if (bashReady) return bashReady
   bashReady = (async () => {
     if (POSIX_SHELL) return
+    // A saved path is trusted only after it answers a probe. A moved or
+    // upgraded Git install must not fail every command forever.
+    let saved = null
     try {
-      const savedRaw = (() => { try { return localStorage.getItem('githermes.bashPath') } catch { return null } })();
-      const saved = savedRaw ? savedRaw.replace(/\\/g, '/') : null
-      if (saved) {
-        bashPath = saved
-        return
-      }
-    } catch {}
+      const savedRaw = (() => { try { return localStorage.getItem('githermes.bashPath') } catch { return null } })()
+      saved = savedRaw ? savedRaw.replace(/\//g, '\\') : null
+    } catch { saved = null }
+    if (saved) {
+      try {
+        const probe = await requestShell(sessionShellParams(bashProbeCommand(saved), currentSessionId()))
+        if (String(probe?.stdout || '').includes('FOUND')) {
+          bashPath = saved
+          return
+        }
+      } catch {}
+      try { localStorage.removeItem('githermes.bashPath') } catch {}
+    }
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const r = await host.request('shell.exec', { command: 'where git' })
+        const r = await requestShell(sessionShellParams('where git', currentSessionId()))
         const git = (r.stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0]
         if (!git) continue
         const normalizedGit = git.replace(/\\/g, '/')
         const m = normalizedGit.match(/^(.*)\/(?:cmd|mingw64\/bin|usr\/bin)\/[^/]+$/i)
         const root = m ? m[1] : normalizedGit.replace(/\/[^/]+$/, '')
         for (const candidate of [`${root}\\bin\\bash.exe`, `${root}\\usr\\bin\\bash.exe`]) {
-          const probe = await host.request('shell.exec', { command: `if exist ${candidate} echo FOUND` })
-          if ((probe.stdout || '').includes('FOUND')) {
+          const probe = await requestShell(sessionShellParams(bashProbeCommand(candidate), currentSessionId()))
+          if (String(probe?.stdout || '').includes('FOUND')) {
             bashPath = candidate
-            try { localStorage.setItem('githermes.bashPath', bashPath ? bashPath.replace(/\//g, '\\') : '') } catch {}
+            try { localStorage.setItem('githermes.bashPath', bashPath.replace(/\//g, '\\')) } catch {}
             return
           }
         }
@@ -632,6 +675,8 @@ function resolveBash() {
         await new Promise(r => setTimeout(r, 200 * (attempt + 1)))
       }
     }
+    // Never cache a miss: the next call retries once a chat session exists.
+    if (!bashPath) bashReady = null
   })()
   return bashReady
 }
@@ -653,7 +698,7 @@ async function shellCommand(cmd) {
 }
 
 async function sh(cmd) {
-  const r = await host.request('shell.exec', { command: await shellCommand(cmd) })
+  const r = await requestShell(sessionShellParams(await shellCommand(cmd), currentSessionId()))
   if (r.code !== 0) throw new Error((r.stderr || r.stdout || `exit ${r.code}`).trim().slice(0, 600))
   return (r.stdout || '').trim()
 }
@@ -895,7 +940,7 @@ async function fetchIssueByNumber(repo, n) {
 }
 
 async function shJsonLoose(cmd) {
-  const r = await host.request('shell.exec', { command: await shellCommand(cmd) })
+  const r = await requestShell(sessionShellParams(await shellCommand(cmd), currentSessionId()))
   const out = (r.stdout || '').trim()
   if (!out) {
     if (r.code !== 0) throw new Error((r.stderr || `exit ${r.code}`).trim().slice(0, 400))
