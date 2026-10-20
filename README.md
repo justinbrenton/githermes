@@ -3,7 +3,7 @@
 GitHub pull requests and issues in a side pane inside Hermes Desktop.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Hermes Desktop: 0.21.1+](https://img.shields.io/badge/hermes%20desktop-0.21.1%2B-6b46c1.svg)](https://hermes-agent.nousresearch.com/docs/user-guide/desktop)
+[![Hermes Desktop: 0.22.2+](https://img.shields.io/badge/hermes%20desktop-0.22.2%2B-6b46c1.svg)](https://hermes-agent.nousresearch.com/docs/user-guide/desktop)
 
 GitHermes puts the review work you already do in a browser tab next to the code you are reading. Open a pull request, read the conversation, check CI, look at the diff hunks, and merge it without leaving the editor. Issues get the same treatment, with label chips in their real colors and a state filter.
 
