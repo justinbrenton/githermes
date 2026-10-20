@@ -1323,28 +1323,183 @@ function useRepos() {
 }
 
 
+// `gh pr list --json statusCheckRollup` returns a list of check runs and status
+// contexts (null when a PR has no checks at all). Callers that pass a single
+// rollup object still work, which keeps older cached payloads readable.
+const PR_CHECK_FAIL_CONCLUSIONS = new Set(['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE'])
+const PR_CHECK_FAIL_STATES = new Set(['FAILURE', 'ERROR'])
+const prDecision = pr => String(pr?.reviewDecision || '').toUpperCase()
+const prMergeable = pr => String(pr?.mergeable || '').toUpperCase()
+
+const checkEntries = rollup => (Array.isArray(rollup) ? rollup : rollup ? [rollup] : [])
+const entryFailed = entry => PR_CHECK_FAIL_CONCLUSIONS.has(String(entry?.conclusion || '').toUpperCase()) || PR_CHECK_FAIL_STATES.has(String(entry?.state || '').toUpperCase())
+const entryPending = entry => {
+  const state = String(entry?.state || '').toUpperCase()
+  if (state) return state === 'PENDING'
+  const status = String(entry?.status || '').toUpperCase()
+  if (status) return status !== 'COMPLETED'
+  const bucket = String(entry?.bucket || '')
+  if (bucket) return bucket === 'pending'
+  return false
+}
+
+export function prCheckFailed(pr) {
+  const entries = checkEntries(pr?.statusCheckRollup)
+  if (entries.some(entry => String(entry?.bucket || '') === 'fail')) return true
+  return entries.some(entryFailed)
+}
+
+export function prChecksPass(pr) {
+  const entries = checkEntries(pr?.statusCheckRollup)
+  if (!entries.length) return true
+  if (entries.some(entryFailed)) return false
+  return !entries.some(entryPending)
+}
+
+export function prNeedsAction(pr) {
+  if (prCheckFailed(pr)) return true
+  if (prMergeable(pr) === 'CONFLICTING') return true
+  return prDecision(pr) === 'CHANGES_REQUESTED'
+}
+
+export function prWaitingOnReview(pr) {
+  if (pr?.isDraft) return false
+  if (prNeedsAction(pr)) return false
+  // A PR that already satisfies ready-to-merge is not waiting on anything, so
+  // the two sections never double-count the same row.
+  if (prReadyToMerge(pr)) return false
+  return true
+}
+
+export function prReadyToMerge(pr) {
+  if (pr?.isDraft) return false
+  if (prMergeable(pr) === 'CONFLICTING') return false
+  const decision = prDecision(pr)
+  if (decision === 'CHANGES_REQUESTED' || decision === 'REVIEW_REQUIRED') return false
+  return prChecksPass(pr)
+}
+
+export function parseTeamSlugs(text) {
+  let parsed = null
+  try { parsed = JSON.parse(String(text || '')) } catch { return [] }
+  if (!Array.isArray(parsed)) return []
+  return parsed.map(team => String(team?.slug || '').trim()).filter(Boolean)
+}
+
+export function dedupePrs(list) {
+  const seen = new Set()
+  const out = []
+  for (const item of Array.isArray(list) ? list : []) {
+    const key = String(item?.url || `${item?.repository?.nameWithOwner || ''}#${item?.number || ''}`)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(item)
+  }
+  return out
+}
+
+// Command builders live outside the hooks so the exact `gh` invocation can be
+// asserted in tests without mounting React or touching the network. Field lists
+// differ by command: `gh search` has no reviewDecision or statusCheckRollup.
+const PR_SEARCH_FIELDS = 'number,title,state,author,updatedAt,url,repository,isDraft'
+const PR_LIST_FIELDS = 'number,title,state,author,updatedAt,url,isDraft,reviewDecision,statusCheckRollup,mergeable'
+
+export function reviewRequestedSearchCmd(repo) {
+  return `${GH} search prs --repo ${sq(repo)} --review-requested @me --state open --limit 30 --json ${PR_SEARCH_FIELDS}`
+}
+
+export function teamReviewSearchCmd(repo, team) {
+  return `${GH} search prs --repo ${sq(repo)} --review-requested ${sq(team)} --state open --limit 20 --json ${PR_SEARCH_FIELDS}`
+}
+
+export function draftSearchCmd(repo) {
+  return `${GH} search prs --repo ${sq(repo)} --author @me --draft --state open --limit 30 --json ${PR_SEARCH_FIELDS}`
+}
+
+export function authoredOpenPrListCmd(repo) {
+  return `${GH} pr list --repo ${sq(repo)} --state open --limit 30 --json ${PR_LIST_FIELDS}`
+}
+
+export function myOpenPrListCmd(repo) {
+  return `${GH} pr list --repo ${sq(repo)} --author @me --state open --limit 30 --json ${PR_LIST_FIELDS}`
+}
+
+// A PR can be requested from you personally and from one of your teams. The
+// team section shows only rows the personal section does not already list.
+export function withoutDuplicates(list, exclude) {
+  const taken = new Set((Array.isArray(exclude) ? exclude : []).map(prKey))
+  return (Array.isArray(list) ? list : []).filter(item => !taken.has(prKey(item)))
+}
+
+function prKey(item) {
+  return String(item?.url || `${item?.repository?.nameWithOwner || ''}#${item?.number || ''}`)
+}
+
 function useReviewRequestedPrs() {
   return useQuery({
     queryKey: [ID, 'review-requested-prs'],
+    staleTime: 60_000,
+    enabled: !!githubShellStore.repo.get(),
     queryFn: async () => {
+      const r = githubShellStore.repo.get()
+      if (!r) return []
       try {
-        const out = await sh(`${GH} search prs --review-requested @me --state open --limit 30 --json number,title,state,author,updatedAt,url,repository`)
+        const out = await sh(reviewRequestedSearchCmd(r))
         try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
       } catch { return [] }
     },
+  })
+}
+function useTeamReviewRequestedPrs() {
+  return useQuery({
+    queryKey: [ID, 'team-review-requested-prs'],
     staleTime: 60_000,
+    enabled: !!githubShellStore.repo.get(),
+    queryFn: async () => {
+      const r = githubShellStore.repo.get()
+      if (!r) return []
+      // `gh search prs --review-requested` accepts a team, so the team list is
+      // the missing piece. `user/teams` needs the read:org scope; without it the
+      // call fails and the section stays empty rather than inventing rows.
+      const teamsRaw = await sh(`${GH} api user/teams --paginate --jq ${sq('[.[].slug]')}`).catch(() => '')
+      const teams = parseTeamSlugs(teamsRaw).slice(0, 8)
+      if (!teams.length) return []
+      const searches = teams.map(team => sh(teamReviewSearchCmd(r, team)).catch(() => ''))
+      const outputs = await Promise.all(searches)
+      const rows = []
+      for (const out of outputs) {
+        try { const parsed = JSON.parse(out); if (Array.isArray(parsed)) rows.push(...parsed) } catch {}
+      }
+      return dedupePrs(rows)
+    },
   })
 }
 function useDraftPrs() {
   return useQuery({
     queryKey: [ID, 'draft-prs'],
+    staleTime: 60_000,
+    enabled: !!githubShellStore.repo.get(),
     queryFn: async () => {
+      const r = githubShellStore.repo.get()
+      if (!r) return []
       try {
-        const out = await sh(`${GH} search prs --assignee @me --author @me --draft --state open --limit 30 --json number,title,state,author,updatedAt,url,repository`)
+        const out = await sh(draftSearchCmd(r))
         try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
       } catch { return [] }
     },
+  })
+}
+function useWaitingOnPrs() {
+  return useQuery({
+    queryKey: [ID, 'waiting-on-prs'],
     staleTime: 60_000,
+    enabled: !!githubShellStore.repo.get(),
+    queryFn: async () => {
+      const r = githubShellStore.repo.get()
+      if (!r) return []
+      const out = await sh(myOpenPrListCmd(r))
+      try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed.filter(prWaitingOnReview) : [] } catch { return [] }
+    },
   })
 }
 function useAssignedPrs() {
@@ -1421,8 +1576,8 @@ function useNeedsActionPrs() {
     queryFn: async () => {
       const r = githubShellStore.repo.get()
       if (!r) return []
-      const out = await sh(`${GH} pr list --repo ${sq(r)} --state open --limit 30 --json number,title,state,author,updatedAt,url,repository,reviewDecision,statusCheckRollup`)
-      try { const parsed = JSON.parse(out); if (!Array.isArray(parsed)) return []; const failures = new Set(['FAILURE','ERROR','CANCELLED','TIMED_OUT','ACTION_REQUIRED','STARTUP_FAILURE','STALE']); const reviewActions = new Set(['CHANGES_REQUESTED','REVIEW_REQUIRED']); return parsed.filter(p => (p.statusCheckRollup && (failures.has(p.statusCheckRollup.bucket || '') || failures.has(p.statusCheckRollup.conclusion || '')) || (p.reviewDecision && reviewActions.has(p.reviewDecision)))) } catch { return [] }
+      const out = await sh(authoredOpenPrListCmd(r))
+      try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed.filter(prNeedsAction) : [] } catch { return [] }
     },
   })
 }
@@ -1434,8 +1589,8 @@ function useReadyToMergePrs() {
     queryFn: async () => {
       const r = githubShellStore.repo.get()
       if (!r) return []
-      const out = await sh(`${GH} pr list --repo ${sq(r)} --state open --limit 30 --json number,title,state,author,updatedAt,url,repository,reviewDecision,statusCheckRollup`)
-      try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed.filter(p => p.statusCheckRollup && p.statusCheckRollup.conclusion === 'SUCCESS') : [] } catch { return [] }
+      const out = await sh(authoredOpenPrListCmd(r))
+      try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed.filter(prReadyToMerge) : [] } catch { return [] }
     },
   })
 }
@@ -1455,82 +1610,64 @@ function useAssignedIssues(state) {
 }
 
 function InboxView({ repo }) {
-  const prsQ = useAssignedPrs()
-  const prs = Array.isArray(prsQ.data) ? prsQ.data : []
-  const reviewReq = useReviewRequestedPrs(); const reviewReqList = Array.isArray(reviewReq.data) ? reviewReq.data : []
-  const draftPrs = useDraftPrs(); const draftList = Array.isArray(draftPrs.data) ? draftPrs.data : []
-  const needsAction = useNeedsActionPrs(); const needsActionList = Array.isArray(needsAction.data) ? needsAction.data : []
-  const readyMerge = useReadyToMergePrs(); const readyMergeList = Array.isArray(readyMerge.data) ? readyMerge.data : []
+  const listOf = q => (Array.isArray(q.data) ? q.data : [])
+  const reviewList = listOf(useReviewRequestedPrs())
+  const teamList = withoutDuplicates(listOf(useTeamReviewRequestedPrs()), reviewList)
+  const draftList = listOf(useDraftPrs())
+  const waitingList = listOf(useWaitingOnPrs())
+  const needsActionList = listOf(useNeedsActionPrs())
+  const readyMergeList = listOf(useReadyToMergePrs())
+
   const sectionClass = 'mb-5 pb-4 border-b border-(--ui-stroke-secondary) last:border-0 last:pb-0'
   const subClass = 'text-[11px] text-(--ui-text-tertiary) leading-4 mt-0.5'
   const countClass = 'text-[13px] font-semibold text-(--ui-text-secondary) tabular-nums shrink-0 w-6 text-right'
-  const titleClass = 'text-sm font-medium text-(--ui-text-primary) truncate'
-  const metaClass = 'text-[11px] text-(--ui-text-tertiary) truncate'
-  const prsRows = prs.length ? prs.map(p => {
+
+  const prRow = p => {
     const prRepo = (p.repository && p.repository.nameWithOwner) ? p.repository.nameWithOwner : (repo || '')
     const stateKey = (String(p.state || '').toLowerCase() === 'merged' ? 'merged' : String(p.state || '').toLowerCase() === 'closed' ? 'closed' : 'open')
     const pill = STATE_PILL[stateKey] || STATE_PILL.open
-    const authorBadge = p.author?.login ? jsx('span', { className: 'font-medium', children: `@${p.author.login}` }) : null
-    return jsxs('button', { type: 'button', onClick: () => navigateToSessionPr(prRepo, p.number), className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent', children: [
-      jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: p.author?.login, size: 24 }) }),
-      jsxs('span', { className: 'min-w-0 flex-1', children: [
-        jsxs('button', { type: 'button', className: 'gh-row-open flex w-full items-center gap-1.5 text-left', children: [
-          jsx(Codicon, { name: pill.icon, size: 14, style: { color: pill.bg }, title: pill.label, className: 'shrink-0' }),
-          jsx(ItemTitle, { title: p.title, number: p.number }),
+    return jsxs('button', {
+      type: 'button',
+      key: p.url || `${prRepo}#${p.number}`,
+      onClick: () => navigateToSessionPr(prRepo, p.number),
+      className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent',
+      children: [
+        jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: p.author?.login, size: 24 }) }),
+        jsxs('span', { className: 'min-w-0 flex-1', children: [
+          jsxs('span', { className: 'gh-row-open flex w-full items-center gap-1.5 text-left', children: [
+            jsx(Codicon, { name: p.isDraft ? 'git-pull-request-draft' : pill.icon, size: 14, style: { color: pill.bg }, title: p.isDraft ? 'Draft' : pill.label, className: 'shrink-0' }),
+            jsx(ItemTitle, { title: p.title, number: p.number }),
+          ] }),
+          jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
+            p.author?.login ? jsx('span', { className: 'font-medium', children: `@${p.author.login}` }) : null,
+            jsx('span', { className: 'rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', children: p.repository?.name || (repo ? String(repo).split('/')[1] : '—') }),
+            jsx('span', { className: 'text-(--ui-text-quaternary)', children: '·' }),
+            jsx('span', { children: ago(p.updatedAt) || new Date(p.updatedAt || '').toLocaleDateString() }),
+          ] }),
         ] }),
-        jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
-          authorBadge,
-          jsx('span', { className: 'rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', children: p.repository?.name || '—' }),
-          jsx('span', { className: 'text-(--ui-text-quaternary)', children: '·' }),
-          jsx('span', { children: ago(p.updatedAt) || new Date(p.updatedAt || '').toLocaleDateString() }),
-        ] }),
+        jsx(Codicon, { name: 'chevron-right', className: 'mt-1 shrink-0 text-(--ui-text-quaternary)', 'aria-hidden': true }),
+      ],
+    })
+  }
+
+  const section = (icon, title, list, emptyText) => jsxs('section', {
+    className: sectionClass,
+    children: [
+      jsxs('div', { className: 'flex items-baseline gap-2 px-2 mb-1', children: [
+        jsx('h3', { className: 'gh-list-heading text-[10px] font-semibold uppercase tracking-wide', children: [jsx(Codicon, { name: icon, size: 12 }), '  ', title] }),
+        jsx('span', { className: countClass, children: String(list.length) }),
       ] }),
-      jsx(Codicon, { name: 'chevron-right', className: 'mt-1 shrink-0 text-(--ui-text-quaternary)', 'aria-hidden': true }),
-    ] })
-  }) : null
-  const needsActionRows = needsActionList.length
-    ? needsActionList.map(p => jsxs('button', { type: 'button', onClick: () => navigateToSessionPr(p.repository ? (p.repository.nameWithOwner || (repo || '')) : (repo || ''), p.number), className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent block', children: [jsx('span', { className: 'mt-0.5', children: jsx(Codicon, { name: 'warning', size: 20, style: { color: 'var(--ui-green)' } }) }), jsxs('span', { className: 'min-w-0 flex-1', children: [jsx('span', { className: 'block text-sm font-medium truncate', children: p.title || '' }), jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [`#${p.number ?? ''}`, ' · ', `Updated ${new Date(p.updatedAt || '').toLocaleDateString()}`] })] })] }, p.number))
-    : null
-  const readyMergeRows = readyMergeList.length
-    ? readyMergeList.map(p => jsxs('button', { type: 'button', onClick: () => navigateToSessionPr(p.repository ? (p.repository.nameWithOwner || (repo || '')) : (repo || ''), p.number), className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent block', children: [jsx('span', { className: 'mt-0.5', children: jsx(Codicon, { name: 'git-merge', size: 20, style: { color: 'var(--ui-green)' } }) }), jsxs('span', { className: 'min-w-0 flex-1', children: [jsx('span', { className: 'block text-sm font-medium truncate', children: p.title || '' }), jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [`#${p.number ?? ''}`, ' · ', `Updated ${new Date(p.updatedAt || '').toLocaleDateString()}`] })] })] }, p.number))
-    : null
+      list.length ? list.map(prRow) : jsx('p', { className: subClass + ' px-2 italic', children: emptyText }),
+    ],
+  })
+
   return jsx(ScrollArea, { className: 'h-full', children: jsx('div', { className: 'gh-list', children: [
-    // Needs your review
-    jsxs('section', { className: sectionClass, children: [
-      jsxs('div', { className: 'gh-list-heading flex items-center gap-1.5 px-2 mb-1 text-[10px] font-semibold', children: [jsx(Codicon, { name: 'git-pull-request', size: 12 }), '  ', 'NEEDS YOUR REVIEW', jsx('span', { className: countClass, children: '0' })] }),
-      jsx('p', { className: subClass + ' px-2', children: 'Pull requests that need your review will appear here.' }),
-      jsx('p', { className: subClass + ' px-2 italic', children: 'All caught up' }),
-    ] }),
-    // Needs your team's review
-    jsxs('section', { className: sectionClass, children: [
-      jsxs('div', { className: 'flex items-baseline gap-2 px-2 mb-1', children: [jsx('h3', { className: 'gh-list-heading text-[10px] font-semibold uppercase tracking-wide', children: [jsx(Codicon, { name: 'git-pull-request', size: 12 }), '  ', "NEEDS YOUR TEAM'S REVIEW"] }), jsx('span', { className: countClass, children: String(reviewReqList.length || '0') })] }),
-      jsx('p', { className: subClass + ' px-2', children: "Pull requests that need your team's review will appear here." }),
-      jsx('p', { className: subClass + ' px-2 italic', children: 'All caught up' }),
-    ] }),
-    // Your drafts
-    jsxs('section', { className: sectionClass, children: [
-      jsxs('div', { className: 'flex items-baseline gap-2 px-2 mb-1', children: [jsx('h3', { className: 'gh-list-heading text-[10px] font-semibold', children: [jsx(Codicon, { name: 'git-pull-request-draft', size: 12 }), '  ', 'YOUR DRAFTS'] }), jsx('span', { className: countClass, children: String(draftList.length || '0') })] }),
-      jsx('p', { className: subClass + ' px-2', children: 'Pull requests that you have started but not yet submitted for review will appear here.' }),
-      jsx('p', { className: subClass + ' px-2 italic', children: 'All caught up' }),
-    ] }),
-    // Waiting for review or checks (show assigned/open PRs here as closest match)
-    jsxs('section', { className: sectionClass, children: [
-      jsxs('div', { className: 'flex items-baseline gap-2 px-2 mb-1', children: [jsx('h3', { className: 'gh-list-heading text-[10px] font-semibold', children: [jsx(Codicon, { name: 'git-pull-request', size: 12 }), '  ', 'Waiting for review or checks'] }), jsx('span', { className: countClass, children: String(prs.length || '0') })] }),
-      jsx('p', { className: subClass + ' px-2', children: 'Pull requests waiting for approval, failing checks, merge conflicts, or required changes.' }),
-      prsRows || jsx('p', { className: subClass + ' px-2 italic', children: 'All caught up' }),
-    ] }),
-    // Needs action
-    jsxs('section', { className: sectionClass, children: [
-      jsxs('div', { className: 'flex items-baseline gap-2 px-2 mb-1', children: [jsx('h3', { className: 'gh-list-heading text-[10px] font-semibold', children: [jsx(Codicon, { name: 'warning', size: 12 }), '  ', 'NEEDS ACTION'] }), jsx('span', { className: countClass, children: String(needsActionList.length || '0') })] }),
-      jsx('p', { className: subClass + ' px-2', children: 'Pull requests with failing checks, merge conflicts, outdated branches, or required changes will appear here.' }),
-      needsActionRows || jsx('p', { className: subClass + ' px-2 italic', children: 'No PRs need action right now.' }),
-    ] }),
-    // Ready to merge
-    jsxs('section', { className: sectionClass, children: [
-      jsxs('div', { className: 'flex items-baseline gap-2 px-2 mb-1', children: [jsx('h3', { className: 'gh-list-heading text-[10px] font-semibold', children: [jsx(Codicon, { name: 'git-merge', size: 12 }), '  ', 'READY TO MERGE'] }), jsx('span', { className: countClass, children: String(readyMergeList.length || '0') })] }),
-      jsx('p', { className: subClass + ' px-2', children: 'Pull requests that are ready to merge will appear here.' }),
-      readyMergeRows || jsx('p', { className: subClass + ' px-2 italic', children: 'No PRs ready to merge.' }),
-    ] }),
+    section('eye', 'Needs your review', reviewList, 'Nothing is waiting on your review.'),
+    section('git-pull-request', "Needs your team's review", teamList, 'Nothing is waiting on a team review.'),
+    section('git-pull-request-draft', 'Your drafts', draftList, 'You have no open drafts.'),
+    section('clock', 'Waiting for review or checks', waitingList, 'Nothing of yours is waiting on a reviewer or a check.'),
+    section('warning', 'Needs action', needsActionList, 'No PRs need action right now.'),
+    section('git-merge', 'Ready to merge', readyMergeList, 'No PRs are ready to merge.'),
   ] }) })
 }
 
