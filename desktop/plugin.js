@@ -1649,8 +1649,11 @@ function useRecentIssues(state) {
   return useQuery({
     queryKey: [ID, 'recent-issues', 'v2', state],
     queryFn: async () => {
-      const out = await sh(recentIssuesSearchCmd(state))
-      try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
+      // 30 rows with url/author/repository is ~12 KB, far past the gateway's
+      // 4 KB stdout cap that sh() inherits. shJsonBig walks the payload in
+      // chunks; the capped path truncated it and JSON.parse turned that into [].
+      const parsed = await shJsonBig(recentIssuesSearchCmd(state)).catch(() => null)
+      return Array.isArray(parsed) ? parsed : []
     },
     staleTime: 60_000,
     refetchOnMount: 'always',
