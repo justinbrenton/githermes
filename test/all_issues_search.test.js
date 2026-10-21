@@ -21,6 +21,11 @@ test('recent issues is personal and asks for newest first', () => {
 test('mentioned issues asks for literal mentions', () => {
   const cmd = mentionedIssuesSearchCmd('open')
   assert.ok(cmd.includes('--mentions @me'), 'Mentioned must use --mentions')
+  // Mirrors `is:issue state:open archived:false mentions:@me sort:updated-desc`.
+  // PRs are excluded by default; archived repos are not.
+  assert.ok(cmd.includes('--archived=false'), 'archived repositories must stay out')
+  assert.match(cmd, /--sort updated/)
+  assert.match(cmd, /--order desc/)
   assert.match(cmd, /--limit 5/)
   assert.ok(!cmd.includes('--search '), 'gh search issues has no --search flag')
 })

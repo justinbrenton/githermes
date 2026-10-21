@@ -1630,8 +1630,11 @@ export function recentIssuesSearchCmd(state) {
 }
 
 // It has no --search flag either, and its mention filter is `--mentions`.
+// Mirrors the web query `is:issue state:open archived:false mentions:@me
+// sort:updated-desc`: PRs are excluded by default, archived repos are filtered
+// out, and newest-first needs --sort/--order.
 export function mentionedIssuesSearchCmd(state) {
-  return issueSearchCmd(['--mentions', '@me', issueSearchStateArg(state), '--limit', '5', '--json', ISSUE_SEARCH_FIELDS])
+  return issueSearchCmd(['--mentions', '@me', '--archived=false', issueSearchStateArg(state), '--sort', 'updated', '--order', 'desc', '--limit', '5', '--json', ISSUE_SEARCH_FIELDS])
 }
 
 function useCreatedIssues(state) {
