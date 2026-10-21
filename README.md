@@ -88,7 +88,7 @@ The state filter maps onto `gh search` flags, which understand `open` and `close
 
 ## Requirements
 
-- Hermes Desktop 0.21.1 or newer
+- Hermes Desktop 0.22.2 or newer
 - The [GitHub CLI](https://cli.github.com/), installed and signed in. Check with `gh auth status`
 
 There is no build step and no dependency of its own to install.

@@ -19,18 +19,21 @@ test('shell: every gh/hermes invocation resolves the binary per platform', () =>
   assert.ok(source.includes("${POSIX_SHELL ? POSIX_PATH : ''}hermes"), 'HERMES must be platform-gated')
 })
 
-test('shell: every shell.exec goes through requestShell and the shellCommand wrapper', () => {
-  // One raw `host.request('shell.exec', ...)` is allowed, inside requestShell,
-  // where invalid_params is translated. Every other call must wrap the command
-  // in shellCommand (the Windows bash hop) and carry the session id.
-  const wrapped = source.match(/requestShell\(await shellCommand\(/g) || []
-  assert.ok(wrapped.length >= 2, `expected the gh callers to route through shellCommand, found ${wrapped.length}`)
+test('shell: every shell.exec goes through shellExec and the negotiation wrapper', () => {
+  // One raw `host.request('shell.exec', ...)` is allowed, inside attemptShell,
+  // where the session_id shape is negotiated. Every query goes through
+  // shellExec -> shellCommand so nothing bypasses the Windows bash hop.
+  assert.ok(source.includes('async function shellExec(cmd)'), 'shellExec wrapper is missing')
+  assert.ok(source.includes('export async function sh(cmd)'), 'sh must be exported for tests')
+  const wrapped = source.match(/await shellExec\(cmd\)/g) || []
+  assert.ok(wrapped.length >= 2, `expected the gh callers to route through shellExec, found ${wrapped.length}`)
   assert.equal(
     (source.match(/host\.request\('shell\.exec'/g) || []).length,
     2,
     'expected the banner comment plus exactly one raw call inside attemptShell',
   )
   assert.ok(source.includes('sessionModeForError'), 'session_id support must be negotiated with the backend')
+  assert.ok(source.includes('lastSessionId'), 'a fresh draft must reuse the last live chat')
   // cmd.exe parses the whole command string (no \" handling; |>&^% are live), so user
   // text may only cross it as base64; bash decodes to a $$-unique script and runs it.
   assert.ok(!source.includes('echo ${cmd}'), 'raw command text must not cross cmd.exe')
@@ -57,7 +60,22 @@ test('shell: Windows routes through Git bash, not WSL bash', () => {
   assert.ok(source.includes('Git for Windows bash.exe was not found'), 'missing Git Bash needs a clear recovery error')
 })
 
-test('shell: bash is resolved once at registration', () => {
+test('shell: registration does not probe a shell before a chat exists', () => {
   const register = source.slice(source.indexOf('register(ctx) {'))
-  assert.ok(register.includes('resolveBash()'), 'register must start bash resolution')
+  assert.ok(!register.includes('resolveBash()'), 'registration must not require a session to probe bash')
+})
+
+test('shell: every shell.exec can carry a session_id (#107)', () => {
+  // Hermes' session-authority shell.exec rejects a call without session_id as
+  // invalid_params, which surfaced as "Could not load repositories". The plugin
+  // negotiates the shape instead of hardcoding it, so every call site goes
+  // through requestShell and sessionShellParams.
+  assert.ok(source.includes('function sessionShellParams(command, sessionId)'), 'session params builder is missing')
+  assert.ok(source.includes('sessionModeForError'), 'legacy vs session authority must be negotiated')
+  const raw = source.split('\n').filter(line => line.includes("host.request('shell.exec'"))
+  // The banner comment plus the single call inside attemptShell.
+  assert.equal(raw.length, 2, `expected the comment and one raw call inside attemptShell, found ${raw.length}`)
+  const call = raw.find(line => line.includes('shellShellParamsFor('))
+  assert.ok(call, 'attemptShell must build params through the session helper')
+  assert.ok(source.includes('focusedSessionId') && source.includes('activeSessionId'), 'must read the session from host.state')
 })
