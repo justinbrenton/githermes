@@ -1640,6 +1640,23 @@ function issueSearchCmd(args) {
   return [GH, 'search', 'issues', ...args].filter(Boolean).join(' ')
 }
 
+const ISSUE_SEARCH_FIELDS = 'number,title,state,author,updatedAt,url,repository'
+
+// `gh search issues` has no --updated-desc. Newest first is --sort/--order.
+// `--involves @me` keeps the section to issues the user actually touches;
+// without it the search spans all of GitHub and returns strangers' issues.
+export function recentIssuesSearchCmd(state) {
+  return issueSearchCmd(['--involves', '@me', issueSearchStateArg(state), '--sort', 'updated', '--order', 'desc', '--limit', '30', '--json', ISSUE_SEARCH_FIELDS])
+}
+
+// It has no --search flag either, and its mention filter is `--mentions`.
+// Mirrors the web query `is:issue state:open archived:false mentions:@me
+// sort:updated-desc`: PRs are excluded by default, archived repos are filtered
+// out, and newest-first needs --sort/--order.
+export function mentionedIssuesSearchCmd(state) {
+  return issueSearchCmd(['--mentions', '@me', '--archived=false', issueSearchStateArg(state), '--sort', 'updated', '--order', 'desc', '--limit', '5', '--json', ISSUE_SEARCH_FIELDS])
+}
+
 function useCreatedIssues(state) {
   const flag = issueSearchStateArg(state)
   return useQuery({
@@ -1652,28 +1669,30 @@ function useCreatedIssues(state) {
   })
 }
 function useRecentIssues(state) {
-  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'recent-issues', state],
+    queryKey: [ID, 'recent-issues', 'v3', state],
     queryFn: async () => {
-      const out = await sh(issueSearchCmd([flag, '--updated-desc', '--limit', '30', '--json', 'number,title,state,author,updatedAt,url,repository']))
-      try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
+      // 30 rows with url/author/repository can pass the gateway's 4 KB stdout
+      // cap that sh() inherits, which truncates the JSON mid-string.
+      const parsed = await shJsonBig(recentIssuesSearchCmd(state)).catch(() => null)
+      return Array.isArray(parsed) ? parsed : []
     },
     staleTime: 60_000,
+    refetchOnMount: 'always',
   })
 }
 
 function useMentionedIssues(state) {
-  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'mentioned-issues', state],
+    queryKey: [ID, 'mentioned-issues', 'v3', state],
     queryFn: async () => {
       try {
-        const out = await sh(issueSearchCmd(['--search', '"involves:@me"', flag, '--limit', '5', '--json', 'number,title,state,author,updatedAt,url,repository']))
+        const out = await sh(mentionedIssuesSearchCmd(state))
         try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
       } catch { return [] }
     },
     staleTime: 60_000,
+    refetchOnMount: 'always',
   })
 }
 function listOf(value) {
