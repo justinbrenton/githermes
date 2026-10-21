@@ -11,8 +11,8 @@ import {
   reviewRequestedSearchCmd,
   teamReviewSearchCmd,
   draftSearchCmd,
-  authoredOpenPrListCmd,
-  myOpenPrListCmd,
+  inboxAuthoredPrsCmd,
+  parseInboxAuthoredPrs,
   withoutDuplicates,
   filterInboxList,
 } from '../desktop/plugin.js'
@@ -108,11 +108,17 @@ test('waiting and ready never claim the same PR', () => {
 })
 
 test('review-requested search asks the right question', () => {
-  const cmd = reviewRequestedSearchCmd('justinbrenton/githermes')
-  assert.match(cmd, /gh search prs --repo 'justinbrenton\/githermes' --review-requested @me --state open --limit 30 /)
+  const cmd = reviewRequestedSearchCmd()
+  // The Inbox is global: no --repo, so every repository is searched.
+  assert.ok(!cmd.includes('--repo'), cmd)
+  assert.match(cmd, /gh search prs --review-requested @me --state open --limit 30 /)
   // `gh search prs --json` has no reviewDecision or statusCheckRollup, so the
   // command must not ask for them or GitHub errors out and the section empties.
   assert.ok(cmd.endsWith('--json number,title,state,author,updatedAt,url,repository,isDraft'))
+})
+
+test('a repo can still be passed explicitly when a caller wants one', () => {
+  assert.match(reviewRequestedSearchCmd('justinbrenton/githermes'), /--repo 'justinbrenton\/githermes'/)
 })
 
 test('team review search is repo-scoped and quotes hostile team names', () => {
@@ -121,19 +127,37 @@ test('team review search is repo-scoped and quotes hostile team names', () => {
 })
 
 test('draft search keeps --draft and the search field set', () => {
-  const cmd = draftSearchCmd('o/r')
-  assert.match(cmd, /gh search prs --repo 'o\/r' --author @me --draft --state open --limit 30 /)
+  const cmd = draftSearchCmd()
+  assert.ok(!cmd.includes('--repo'), cmd)
+  assert.match(cmd, /gh search prs --author @me --draft --state open --limit 30 /)
   assert.ok(!cmd.includes('statusCheckRollup'))
 })
 
-test('pr list commands never ask for the repository field', () => {
-  // `gh pr list --json repository` fails the whole call; the pane then shows an
-  // empty section with no error, which is how this section broke before.
-  for (const cmd of [authoredOpenPrListCmd('o/r'), myOpenPrListCmd('o/r')]) {
-    assert.ok(cmd.includes('--json number,title,state,author,updatedAt,url,isDraft,reviewDecision,statusCheckRollup,mergeable'), cmd)
-    assert.ok(!cmd.includes('repository'), cmd)
+test('the authored PR read is GraphQL and carries the status fields', () => {
+  const cmd = inboxAuthoredPrsCmd()
+  assert.match(cmd, /gh api graphql/)
+  assert.ok(!cmd.includes('--repo'), 'the inbox spans every repository')
+  for (const field of ['reviewDecision', 'mergeable', 'statusCheckRollup']) {
+    assert.ok(cmd.includes(field), `missing ${field}: ${cmd}`)
   }
-  assert.match(myOpenPrListCmd('o/r'), /pr list --repo 'o\/r' --author @me --state open /)
+})
+
+test('parseInboxAuthoredPrs flattens the GraphQL search envelope', () => {
+  const json = { data: { search: { nodes: [
+    null,
+    {
+      number: 16, title: 'fix', url: 'u', isDraft: false, state: 'OPEN',
+      updatedAt: '2026-10-21T00:00:00Z', reviewDecision: null, mergeable: 'MERGEABLE',
+      repository: { name: 'githermes', nameWithOwner: 'justinbrenton/githermes' },
+      author: { login: 'justinbrenton' }, statusCheckRollup: { state: 'SUCCESS' },
+    },
+  ] } } }
+  const rows = parseInboxAuthoredPrs(json)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].repository.nameWithOwner, 'justinbrenton/githermes')
+  assert.equal(rows[0].statusCheckRollup.state, 'SUCCESS')
+  assert.deepEqual(parseInboxAuthoredPrs({ data: { search: null } }), [])
+  assert.deepEqual(parseInboxAuthoredPrs(null), [])
 })
 
 test('the team section drops rows the personal section already shows', () => {

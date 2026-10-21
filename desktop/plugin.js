@@ -1481,26 +1481,54 @@ export function dedupePrs(list) {
 // asserted in tests without mounting React or touching the network. Field lists
 // differ by command: `gh search` has no reviewDecision or statusCheckRollup.
 const PR_SEARCH_FIELDS = 'number,title,state,author,updatedAt,url,repository,isDraft'
-const PR_LIST_FIELDS = 'number,title,state,author,updatedAt,url,isDraft,reviewDecision,statusCheckRollup,mergeable'
 
+// Inbox queries are global: the tab is the user's inbox, so it spans every
+// repository. `--repo` is only added when a caller passes one.
 export function reviewRequestedSearchCmd(repo) {
-  return `${GH} search prs --repo ${sq(repo)} --review-requested @me --state open --limit 30 --json ${PR_SEARCH_FIELDS}`
+  return prSearchCmd(['--review-requested', '@me', '--state', 'open', '--limit', '30'], repo)
 }
 
 export function teamReviewSearchCmd(repo, team) {
-  return `${GH} search prs --repo ${sq(repo)} --review-requested ${sq(team)} --state open --limit 20 --json ${PR_SEARCH_FIELDS}`
+  return prSearchCmd(['--review-requested', sq(team), '--state', 'open', '--limit', '20'], repo)
 }
 
 export function draftSearchCmd(repo) {
-  return `${GH} search prs --repo ${sq(repo)} --author @me --draft --state open --limit 30 --json ${PR_SEARCH_FIELDS}`
+  return prSearchCmd(['--author', '@me', '--draft', '--state', 'open', '--limit', '30'], repo)
 }
 
-export function authoredOpenPrListCmd(repo) {
-  return `${GH} pr list --repo ${sq(repo)} --state open --limit 30 --json ${PR_LIST_FIELDS}`
+function prSearchCmd(args, repo) {
+  return [GH, 'search', 'prs', repo ? `--repo ${sq(repo)}` : '', ...args, '--json', PR_SEARCH_FIELDS]
+    .filter(Boolean)
+    .join(' ')
 }
 
-export function myOpenPrListCmd(repo) {
-  return `${GH} pr list --repo ${sq(repo)} --author @me --state open --limit 30 --json ${PR_LIST_FIELDS}`
+// `gh search prs` returns no reviewDecision, mergeable or statusCheckRollup, so
+// the draft-and-status sections cannot be built from it. One GraphQL search
+// covers every repository at once and carries those three fields.
+const INBOX_AUTHORED_QUERY = 'query{search(query:"is:pr author:@me state:open",type:ISSUE,first:50){nodes{... on PullRequest{number title url isDraft state updatedAt reviewDecision mergeable repository{name nameWithOwner} author{login} statusCheckRollup{state}}}}}'
+
+export function inboxAuthoredPrsCmd() {
+  return `${GH} api graphql -f query=${sq(INBOX_AUTHORED_QUERY)}`
+}
+
+export function parseInboxAuthoredPrs(json) {
+  const nodes = json?.data?.search?.nodes
+  if (!Array.isArray(nodes)) return []
+  return nodes.filter(Boolean).map(node => ({
+    number: node.number,
+    title: node.title,
+    url: node.url,
+    isDraft: node.isDraft,
+    state: node.state,
+    updatedAt: node.updatedAt,
+    reviewDecision: node.reviewDecision,
+    mergeable: node.mergeable,
+    repository: node.repository
+      ? { name: node.repository.name, nameWithOwner: node.repository.nameWithOwner }
+      : undefined,
+    author: node.author ? { login: node.author.login } : undefined,
+    statusCheckRollup: node.statusCheckRollup || undefined,
+  }))
 }
 
 // The Inbox honours the pane's search box the same way the PR and Issue lists
@@ -1525,14 +1553,11 @@ function prKey(item) {
 
 function useReviewRequestedPrs() {
   return useQuery({
-    queryKey: [ID, 'review-requested-prs'],
+    queryKey: [ID, 'review-requested-prs', 'v2'],
     staleTime: 60_000,
-    enabled: !!githubShellStore.repo.get(),
     queryFn: async () => {
-      const r = githubShellStore.repo.get()
-      if (!r) return []
       try {
-        const out = await sh(reviewRequestedSearchCmd(r))
+        const out = await sh(reviewRequestedSearchCmd())
         try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
       } catch { return [] }
     },
@@ -1540,19 +1565,16 @@ function useReviewRequestedPrs() {
 }
 function useTeamReviewRequestedPrs() {
   return useQuery({
-    queryKey: [ID, 'team-review-requested-prs'],
+    queryKey: [ID, 'team-review-requested-prs', 'v2'],
     staleTime: 60_000,
-    enabled: !!githubShellStore.repo.get(),
     queryFn: async () => {
-      const r = githubShellStore.repo.get()
-      if (!r) return []
       // `gh search prs --review-requested` accepts a team, so the team list is
       // the missing piece. `user/teams` needs the read:org scope; without it the
       // call fails and the section stays empty rather than inventing rows.
       const teamsRaw = await sh(`${GH} api user/teams --paginate --jq ${sq('[.[].slug]')}`).catch(() => '')
       const teams = parseTeamSlugs(teamsRaw).slice(0, 8)
       if (!teams.length) return []
-      const searches = teams.map(team => sh(teamReviewSearchCmd(r, team)).catch(() => ''))
+      const searches = teams.map(team => sh(teamReviewSearchCmd(null, team)).catch(() => ''))
       const outputs = await Promise.all(searches)
       const rows = []
       for (const out of outputs) {
@@ -1564,29 +1586,27 @@ function useTeamReviewRequestedPrs() {
 }
 function useDraftPrs() {
   return useQuery({
-    queryKey: [ID, 'draft-prs'],
+    queryKey: [ID, 'draft-prs', 'v2'],
     staleTime: 60_000,
-    enabled: !!githubShellStore.repo.get(),
     queryFn: async () => {
-      const r = githubShellStore.repo.get()
-      if (!r) return []
       try {
-        const out = await sh(draftSearchCmd(r))
+        const out = await sh(draftSearchCmd())
         try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
       } catch { return [] }
     },
   })
 }
-function useWaitingOnPrs() {
+
+// One global read of the user's open PRs, carrying the review decision, merge
+// state and check rollup that the three status sections need.
+function useMyAuthoredPrs() {
   return useQuery({
-    queryKey: [ID, 'waiting-on-prs'],
+    queryKey: [ID, 'my-authored-prs', 'v2'],
     staleTime: 60_000,
-    enabled: !!githubShellStore.repo.get(),
+    refetchOnMount: 'always',
     queryFn: async () => {
-      const r = githubShellStore.repo.get()
-      if (!r) return []
-      const out = await sh(myOpenPrListCmd(r))
-      try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed.filter(prWaitingOnReview) : [] } catch { return [] }
+      const parsed = await shJsonBig(inboxAuthoredPrsCmd()).catch(() => null)
+      return parseInboxAuthoredPrs(parsed)
     },
   })
 }
@@ -1656,31 +1676,8 @@ function useMentionedIssues(state) {
     staleTime: 60_000,
   })
 }
-function useNeedsActionPrs() {
-  return useQuery({
-    queryKey: [ID, 'needs-action-prs'],
-    staleTime: 60_000,
-    enabled: !!githubShellStore.repo.get(),
-    queryFn: async () => {
-      const r = githubShellStore.repo.get()
-      if (!r) return []
-      const out = await sh(authoredOpenPrListCmd(r))
-      try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed.filter(prNeedsAction) : [] } catch { return [] }
-    },
-  })
-}
-function useReadyToMergePrs() {
-  return useQuery({
-    queryKey: [ID, 'ready-merge-prs'],
-    staleTime: 60_000,
-    enabled: !!githubShellStore.repo.get(),
-    queryFn: async () => {
-      const r = githubShellStore.repo.get()
-      if (!r) return []
-      const out = await sh(authoredOpenPrListCmd(r))
-      try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed.filter(prReadyToMerge) : [] } catch { return [] }
-    },
-  })
+function listOf(value) {
+  return Array.isArray(value) ? value : []
 }
 function useAssignedIssues(state) {
   const flag = issueSearchStateArg(state)
@@ -1700,22 +1697,21 @@ function useAssignedIssues(state) {
 function InboxView({ repo }) {
   const query = useValue($listQuery)
   const [collapsed, toggleSection] = useCollapsedSections()
-  const listOf = q => (Array.isArray(q.data) ? q.data : [])
   const matches = list => filterInboxList(list, query)
 
   const reviewQ = useReviewRequestedPrs()
   const teamQ = useTeamReviewRequestedPrs()
   const draftQ = useDraftPrs()
-  const waitingQ = useWaitingOnPrs()
-  const needsActionQ = useNeedsActionPrs()
-  const readyMergeQ = useReadyToMergePrs()
+  // One global read feeds the three status sections.
+  const mineQ = useMyAuthoredPrs()
+  const mine = listOf(mineQ.data)
 
-  const reviewList = matches(listOf(reviewQ))
-  const teamList = matches(withoutDuplicates(listOf(teamQ), listOf(reviewQ)))
-  const draftList = matches(listOf(draftQ))
-  const waitingList = matches(listOf(waitingQ))
-  const needsActionList = matches(listOf(needsActionQ))
-  const readyMergeList = matches(listOf(readyMergeQ))
+  const reviewList = matches(listOf(reviewQ.data))
+  const teamList = matches(withoutDuplicates(listOf(teamQ.data), listOf(reviewQ.data)))
+  const draftList = matches(listOf(draftQ.data))
+  const waitingList = matches(mine.filter(prWaitingOnReview))
+  const needsActionList = matches(mine.filter(prNeedsAction))
+  const readyMergeList = matches(mine.filter(prReadyToMerge))
 
   const sectionClass = 'mb-5 pb-4 border-b border-(--ui-stroke-secondary) last:border-0 last:pb-0'
   const subClass = 'text-[11px] text-(--ui-text-tertiary) leading-4 mt-0.5'
@@ -1764,9 +1760,9 @@ function InboxView({ repo }) {
     section('inbox-review', 'eye', 'Needs your review', reviewQ, reviewList, 'Nothing is waiting on your review.'),
     section('inbox-team', 'git-pull-request', "Needs your team's review", teamQ, teamList, 'Nothing is waiting on a team review.'),
     section('inbox-drafts', 'git-pull-request-draft', 'Your drafts', draftQ, draftList, 'You have no open drafts.'),
-    section('inbox-waiting', 'clock', 'Waiting for review or checks', waitingQ, waitingList, 'Nothing of yours is waiting on a reviewer or a check.'),
-    section('inbox-action', 'warning', 'Needs action', needsActionQ, needsActionList, 'No PRs need action right now.'),
-    section('inbox-ready', 'git-merge', 'Ready to merge', readyMergeQ, readyMergeList, 'No PRs are ready to merge.'),
+    section('inbox-waiting', 'clock', 'Waiting for review or checks', mineQ, waitingList, 'Nothing of yours is waiting on a reviewer or a check.'),
+    section('inbox-action', 'warning', 'Needs action', mineQ, needsActionList, 'No PRs need action right now.'),
+    section('inbox-ready', 'git-merge', 'Ready to merge', mineQ, readyMergeList, 'No PRs are ready to merge.'),
   ] }) })
 }
 
