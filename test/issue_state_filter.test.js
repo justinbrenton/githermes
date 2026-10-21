@@ -23,7 +23,7 @@ test('every All Issues hook takes a state and puts it in its query key', () => {
     const body = source.slice(start, source.indexOf('\nfunction ', start + 1))
     assert.match(body, new RegExp(`function ${hook}\\(state`), `${hook} must accept state`)
     assert.ok(body.includes('issueSearchStateArg(state)'), `${hook} must derive its state flag`)
-    assert.match(body, /queryKey: \[ID, '[a-z-]+', state\]/, `${hook} must key its cache on state`)
+    assert.match(body, /queryKey: \[ID, '[a-z-]+', ('v\d+', )?state\]/, `${hook} must key its cache on state`)
   }
 })
 
