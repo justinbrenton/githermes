@@ -603,14 +603,35 @@ export function pickSessionId(focused, active) {
   return focused || active || null
 }
 
-// `shell.exec` is served by the session authority on Hermes 0.22.1+, which
-// rejects a call without `session_id` as `invalid_params`. Older gateways never
-// learned the field, so it is only sent when a session actually exists.
-function currentSessionId() {
+function liveSessionId() {
   const st = host.state || {}
   const read = value => (value && typeof value.get === 'function' ? value.get() : value)
   return pickSessionId(read(st.focusedSessionId), read(st.activeSessionId))
 }
+
+// `shell.exec` is served by the session authority on Hermes 0.22.1+, which
+// rejects a call without `session_id` as `invalid_params`. Older gateways never
+// learned the field, so it is only sent when a session actually exists.
+//
+// A fresh "New session" draft has no runtime id until its first message, so a
+// draft reuses the last chat seen live. Hermes rejects that chat once it is
+// gone (closed, pruned); shellExec then forgets it and the pane shows the
+// start-a-chat state instead of an error.
+let lastSessionId = null
+
+export function rememberSessionId(id) {
+  const first = !lastSessionId
+  if (id) lastSessionId = id
+  return first && !!id
+}
+
+export function currentSessionId() {
+  const live = liveSessionId()
+  if (live) lastSessionId = live
+  return live || lastSessionId
+}
+
+export const NO_SESSION = 'GitHermes is waiting for a started chat'
 
 export function sessionShellParams(command, sessionId) {
   return sessionId ? { command, session_id: sessionId } : { command }
@@ -644,32 +665,42 @@ function shellShellParamsFor(command, withSession) {
   return sessionShellParams(command, withSession ? currentSessionId() : null)
 }
 
+// With a live session, send it first: Hermes 0.22.1+ is the common case and
+// the negotiated mode is then settled after one call. A 0.21.x sidecar rejects
+// the field once, which flips the mode for the rest of the session.
 async function requestShell(command) {
-  if (shellSessionMode === true) {
-    try {
-      return await attemptShell(command, true)
-    } catch (error) {
-      if (sessionModeForError(error?.message || error) === false) {
-        shellSessionMode = false
-        return attemptShell(command, false)
-      }
-      throw error
-    }
-  }
+  if (shellSessionMode === false) return attemptShell(command, false)
+  if (!currentSessionId()) return attemptShell(command, false)
   try {
-    return await attemptShell(command, false)
+    return await attemptShell(command, true)
   } catch (error) {
-    if (sessionModeForError(error?.message || error) === true) {
-      shellSessionMode = true
-      return attemptShell(command, true)
+    if (sessionModeForError(error?.message || error) === false) {
+      shellSessionMode = false
+      return attemptShell(command, false)
     }
     throw error
+  }
+}
+
+// One transport for every command: negotiate the session_id shape, then treat a
+// rejected remembered chat as "waiting for a chat" rather than a hard error.
+async function shellExec(cmd) {
+  const command = await shellCommand(cmd)
+  const sessionId = currentSessionId()
+  try {
+    return await requestShell(command)
+  } catch (e) {
+    const rejected = /invalid_params|not_found|session_superseded/.test(String((e && e.message) || e))
+    if (!sessionId || sessionId === liveSessionId() || !rejected) throw e
+    if (lastSessionId === sessionId) lastSessionId = null
+    throw new Error(NO_SESSION)
   }
 }
 
 /** Resolve Git for Windows' bash once. No-op on POSIX, where commands run as-is. */
 function resolveBash() {
   if (bashReady) return bashReady
+  if (!POSIX_SHELL && !currentSessionId()) return Promise.resolve() // don't cache a sessionless miss
   bashReady = (async () => {
     if (POSIX_SHELL) return
     // A saved path is trusted only after it answers a probe. A moved or
@@ -705,7 +736,9 @@ function resolveBash() {
             return
           }
         }
-      } catch {
+      } catch (error) {
+        // Retrying a rejected chat cannot help: the next call would fail the same way.
+        if (/invalid_params|not_found|session_superseded/.test(String(error?.message || error))) break
         await new Promise(r => setTimeout(r, 200 * (attempt + 1)))
       }
     }
@@ -716,6 +749,7 @@ function resolveBash() {
 }
 
 async function shellCommand(cmd) {
+  if (!currentSessionId()) throw new Error(NO_SESSION)
   await resolveBash()
   if (POSIX_SHELL) return cmd
   if (!bashPath) return 'echo Git for Windows bash.exe was not found. Install Git for Windows and reopen this pane.&exit /b 9009'
@@ -731,8 +765,8 @@ async function shellCommand(cmd) {
   return `"${bashPath}" -l -c "echo ${b64} | tr -d '\\r\\n' | base64 -d > /tmp/gt$$.sh; bash /tmp/gt$$.sh; e=$?; unlink /tmp/gt$$.sh; exit $e"`
 }
 
-async function sh(cmd) {
-  const r = await requestShell(await shellCommand(cmd))
+export async function sh(cmd) {
+  const r = await shellExec(cmd)
   if (r.code !== 0) throw new Error((r.stderr || r.stdout || `exit ${r.code}`).trim().slice(0, 600))
   return (r.stdout || '').trim()
 }
@@ -882,9 +916,14 @@ async function shBig(cmd) {
   }
 }
 
+export function githubList(data) {
+  if (!Array.isArray(data)) throw new Error('GitHub returned an invalid list')
+  return data
+}
+
 async function shJsonBig(cmd) {
   const out = await shBig(cmd)
-  if (!out) return null
+  if (!out) throw new Error('GitHub CLI returned empty output')
   try { return JSON.parse(out) } catch { throw new Error('gh JSON parse failed: ' + out.slice(0, 300)) }
 }
 
@@ -902,7 +941,8 @@ async function ghApiBigPaginated(repo, path) {
   const out = []
   for (let page = 1; page <= PAGINATED_PAGE_CAP; page++) {
     const items = await shJsonBig(`${GH} api ${sq(`repos/${repoApiPath(repo)}/${path}${sep}page=${page}`)}`)
-    if (!Array.isArray(items) || !items.length) break
+    if (!Array.isArray(items)) throw new Error('GitHub returned an invalid list')
+    if (!items.length) break
     out.push(...items)
   }
   return out
@@ -974,7 +1014,7 @@ async function fetchIssueByNumber(repo, n) {
 }
 
 async function shJsonLoose(cmd) {
-  const r = await requestShell(await shellCommand(cmd))
+  const r = await shellExec(cmd)
   const out = (r.stdout || '').trim()
   if (!out) {
     if (r.code !== 0) throw new Error((r.stderr || `exit ${r.code}`).trim().slice(0, 400))
@@ -1048,6 +1088,8 @@ export function issuePlan(repo, number, state) {
 // phrases first, generic last. Recovery commands are copy-only, never executed.
 export function classifyGhError(e) {
   const raw = String((e && e.message) || e || '')
+  if (raw.includes(NO_SESSION))
+    return { kind: 'session', title: 'Start a chat to load GitHub', detail: 'Pull requests and issues load through a chat. Send a message in any chat and this view refreshes on its own.' }
   if (/gh: command not found|command not found: gh|No such file or directory/i.test(raw) && /gh/.test(raw))
     return { kind: 'missing', title: 'GitHub CLI not found', detail: 'Install the GitHub CLI (gh) and make sure it is on your PATH, then retry.' }
   if (/not logged into any|gh auth login|authentication required|could not resolve to .* with the token|Bad credentials|HTTP 401/i.test(raw))
@@ -1374,14 +1416,28 @@ function navigateToGithubLink(link) {
   $selIssue.set(plan.selIssue)
 }
 
+// The host's PR chip (`PrTag`, on sidebar rows and the composer's branch row) is
+// a <button data-pr-link> with no href: its URL lives only in the React props.
+// ponytail: reads React's private fiber; swap for an SDK link hook once the host offers one.
+export function prTagUrl(el, maxDepth = 40) {
+  const key = Object.keys(el).find(k => k.startsWith('__reactFiber$'))
+  for (let f = key ? el[key] : null, i = 0; f && i < maxDepth; f = f.return, i++) {
+    const url = f.memoizedProps?.pr?.url
+    if (typeof url === 'string') return url
+  }
+  return null
+}
+
 function onChatLinkClick(event) {
   if (!interceptChatLinks || !shouldInterceptClick(event)) return
   const target = event.target instanceof Element ? event.target : null
-  const a = target?.closest('a[href]')
-  // Only links inside the conversation (assistant-ui message roots), never
-  // this plugin's own pane/page or app chrome.
-  if (!a || !a.closest('[data-slot^="aui_"]') || a.closest('.githermes-pane')) return
-  const link = parseGithubLink(a.getAttribute('href') || '')
+  if (!target || target.closest('.githermes-pane')) return
+  const chip = target.closest('button[data-pr-link]')
+  const a = target.closest('a[href]')
+  // Links only inside the conversation (assistant-ui message roots), never app chrome.
+  const href = chip ? prTagUrl(chip)
+    : a?.closest('[data-slot^="aui_"]') ? a.getAttribute('href') : null
+  const link = href && parseGithubLink(href)
   if (!link) return
   event.preventDefault()
   event.stopImmediatePropagation()
@@ -1931,7 +1987,7 @@ async function getCatalogPin() {
 function useSessionGit(cwd) {
   return useQuery({
     queryKey: [ID, 'session-git', cwd],
-    enabled: !!cwd,
+    enabled: !!cwd && !!currentSessionId(),
     refetchInterval: MEDIUM_POLL_MS,
     queryFn: async () => {
       const branch = await sh(`git -C ${sq(cwd)} rev-parse --abbrev-ref HEAD`).catch(() => '')
@@ -3392,6 +3448,8 @@ function ListErrorState({ title, error, onRetry }) {
 // stderr under the caller's title. Commands are copy-only, never run.
 function GhErrorState({ title, error, onRetry }) {
   const c = classifyGhError(error)
+  // Waiting for a chat is a state, not a failure: no red, no Retry that repeats it.
+  if (c.kind === 'session') return jsx(EmptyState, { title: c.title, description: c.detail })
   const resolved = c.kind === 'unknown' ? title : c.title
   return jsx(ErrorState, {
     title: resolved,
@@ -3469,9 +3527,7 @@ function PrList({ repo, onOpen, query, active = true }) {
     // Growth changes the key: hold previous rows through the fetch (and the
     // error that may follow) instead of flashing the skeleton.
     placeholderData: (prev) => prev,
-    // Issue #10: expanded list metadata can overflow the stdout cap, so the
-    // list routes through shBig.
-    queryFn: () => shJsonBig(`${GH} pr list --repo ${sq(repo)} --state ${sq(state)} --limit ${limit} --json number,title,state,author,updatedAt,url,baseRefName,headRefName,isDraft,additions,deletions,changedFiles,reviewDecision,statusCheckRollup,labels`),
+    queryFn: () => shJsonBig(`${GH} pr list --repo ${sq(repo)} --state ${sq(state)} --limit ${limit} --json number,title,state,author,updatedAt,url,baseRefName,headRefName,isDraft,additions,deletions,changedFiles,reviewDecision,statusCheckRollup,labels`).then(githubList),
     staleTime: 15_000,
     refetchInterval: MEDIUM_POLL_MS,
     refetchOnWindowFocus: true,
@@ -3555,8 +3611,7 @@ function IssueList({ repo, onOpen, query, active = true }) {
     enabled: !!repo && active,
     // Same key-growth hold as the PR list above.
     placeholderData: (prev) => prev,
-    // Issue #10: same stdout-cap routing as the PR list (busy repos overflow).
-    queryFn: () => shJsonBig(`${GH} issue list --repo ${sq(repo)} --state ${sq(state)} --limit ${limit} --json number,title,state,author,updatedAt,url,labels`),
+    queryFn: () => shJsonBig(`${GH} issue list --repo ${sq(repo)} --state ${sq(state)} --limit ${limit} --json number,title,state,author,updatedAt,url,labels`).then(githubList),
     staleTime: 15_000,
     refetchInterval: MEDIUM_POLL_MS,
     refetchOnWindowFocus: true,
@@ -4460,8 +4515,6 @@ export default {
   name: 'GitHermes',
   register(ctx) {
     pluginCtx = ctx
-    // Start the shared probe; shellCommand awaits it before any command runs.
-    resolveBash()
     const saved = ctx.storage.get('repo')
     if (saved) $repo.set(saved)
     interceptChatLinks = ctx.storage.get('interceptChatLinks', true) !== false
@@ -4469,6 +4522,15 @@ export default {
     ctx.onDispose?.(() => window.removeEventListener('click', onChatLinkClick, true))
     const assignments = ctx.storage.get('botAssignments', {})
     if (assignments && typeof assignments === 'object' && !Array.isArray(assignments)) $botAssignments.set(assignments)
+
+    // Remember every chat that goes live, so a fresh draft can reuse it. When the
+    // first one appears, refresh views that were waiting for it.
+    const unwatchSession = host.state.focusedSessionId?.subscribe?.(id => {
+      if (rememberSessionId(id)) {
+        queryClient.invalidateQueries({ queryKey: [ID], predicate: q => q.state.status === 'error' })
+      }
+    })
+    if (unwatchSession) ctx.onDispose?.(unwatchSession)
 
     const paneWrap = () => jsxs('div', { className: 'githermes-pane h-full min-h-0 min-w-0 max-w-full overflow-hidden', children: [
       jsx('style', { children: PANE_WRAP_CSS }),

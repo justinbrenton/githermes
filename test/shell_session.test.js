@@ -37,7 +37,9 @@ test('shell.exec params carry session_id only when one exists', () => {
 
 test('every shell.exec call site goes through requestShell', () => {
   const callSites = source.match(/requestShell\(/g) || []
-  assert.ok(callSites.length >= 6, `expected the helper plus five call sites, found ${callSites.length}`)
+  // Definition, shellExec, the where-git probe, the saved-path probe and the
+  // candidate probe. sh and shJsonLoose reach the shell through shellExec.
+  assert.ok(callSites.length >= 5, `expected the helper plus four call sites, found ${callSites.length}`)
   assert.equal(
     (source.match(/host\.request\('shell\.exec'/g) || []).length,
     2,
