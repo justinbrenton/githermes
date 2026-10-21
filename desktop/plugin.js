@@ -1620,6 +1620,19 @@ function issueSearchCmd(args) {
   return [GH, 'search', 'issues', ...args].filter(Boolean).join(' ')
 }
 
+const ISSUE_SEARCH_FIELDS = 'number,title,state,author,updatedAt,url,repository'
+
+// `gh search issues` has no --updated-desc. Newest first is --sort/--order.
+export function recentIssuesSearchCmd(state) {
+  return issueSearchCmd([issueSearchStateArg(state), '--sort', 'updated', '--order', 'desc', '--limit', '30', '--json', ISSUE_SEARCH_FIELDS])
+}
+
+// It has no --search flag either. `--involves` is the flag behind the web
+// search's involves:@me, covering authored, assigned, mentioned, reviewed.
+export function mentionedIssuesSearchCmd(state) {
+  return issueSearchCmd(['--involves', '@me', issueSearchStateArg(state), '--limit', '5', '--json', ISSUE_SEARCH_FIELDS])
+}
+
 function useCreatedIssues(state) {
   const flag = issueSearchStateArg(state)
   return useQuery({
@@ -1636,7 +1649,7 @@ function useRecentIssues(state) {
   return useQuery({
     queryKey: [ID, 'recent-issues', state],
     queryFn: async () => {
-      const out = await sh(issueSearchCmd([flag, '--updated-desc', '--limit', '30', '--json', 'number,title,state,author,updatedAt,url,repository']))
+      const out = await sh(recentIssuesSearchCmd(state))
       try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
     },
     staleTime: 60_000,
@@ -1649,7 +1662,7 @@ function useMentionedIssues(state) {
     queryKey: [ID, 'mentioned-issues', state],
     queryFn: async () => {
       try {
-        const out = await sh(issueSearchCmd(['--search', '"involves:@me"', flag, '--limit', '5', '--json', 'number,title,state,author,updatedAt,url,repository']))
+        const out = await sh(mentionedIssuesSearchCmd(state))
         try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
       } catch { return [] }
     },
