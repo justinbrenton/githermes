@@ -1623,14 +1623,15 @@ function issueSearchCmd(args) {
 const ISSUE_SEARCH_FIELDS = 'number,title,state,author,updatedAt,url,repository'
 
 // `gh search issues` has no --updated-desc. Newest first is --sort/--order.
+// `--involves @me` keeps the section to issues the user actually touches;
+// without it the search spans all of GitHub and returns strangers' issues.
 export function recentIssuesSearchCmd(state) {
-  return issueSearchCmd([issueSearchStateArg(state), '--sort', 'updated', '--order', 'desc', '--limit', '30', '--json', ISSUE_SEARCH_FIELDS])
+  return issueSearchCmd(['--involves', '@me', issueSearchStateArg(state), '--sort', 'updated', '--order', 'desc', '--limit', '30', '--json', ISSUE_SEARCH_FIELDS])
 }
 
-// It has no --search flag either. `--involves` is the flag behind the web
-// search's involves:@me, covering authored, assigned, mentioned, reviewed.
+// It has no --search flag either, and its mention filter is `--mentions`.
 export function mentionedIssuesSearchCmd(state) {
-  return issueSearchCmd(['--involves', '@me', issueSearchStateArg(state), '--limit', '5', '--json', ISSUE_SEARCH_FIELDS])
+  return issueSearchCmd(['--mentions', '@me', issueSearchStateArg(state), '--limit', '5', '--json', ISSUE_SEARCH_FIELDS])
 }
 
 function useCreatedIssues(state) {
@@ -1645,13 +1646,11 @@ function useCreatedIssues(state) {
   })
 }
 function useRecentIssues(state) {
-  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'recent-issues', 'v2', state],
+    queryKey: [ID, 'recent-issues', 'v3', state],
     queryFn: async () => {
-      // 30 rows with url/author/repository is ~12 KB, far past the gateway's
-      // 4 KB stdout cap that sh() inherits. shJsonBig walks the payload in
-      // chunks; the capped path truncated it and JSON.parse turned that into [].
+      // 30 rows with url/author/repository can pass the gateway's 4 KB stdout
+      // cap that sh() inherits, which truncates the JSON mid-string.
       const parsed = await shJsonBig(recentIssuesSearchCmd(state)).catch(() => null)
       return Array.isArray(parsed) ? parsed : []
     },
@@ -1661,9 +1660,8 @@ function useRecentIssues(state) {
 }
 
 function useMentionedIssues(state) {
-  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'mentioned-issues', 'v2', state],
+    queryKey: [ID, 'mentioned-issues', 'v3', state],
     queryFn: async () => {
       try {
         const out = await sh(mentionedIssuesSearchCmd(state))

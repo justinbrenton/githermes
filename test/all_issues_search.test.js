@@ -6,24 +6,21 @@ import { recentIssuesSearchCmd, mentionedIssuesSearchCmd } from '../desktop/plug
 
 const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
 
-// Both commands shipped with flags `gh search issues` does not accept, and the
-// hooks swallow the failure as "no data", so the sections looked empty rather
-// than broken. These tests pin the exact commands and, when the CLI is present,
-// check every flag against its own help output.
-
-test('recent issues asks for newest first, not a bundled flag', () => {
+test('recent issues is personal and asks for newest first', () => {
   const cmd = recentIssuesSearchCmd('open')
   assert.match(cmd, /gh search issues/)
+  // Without a user filter this searches all of GitHub and returns strangers'
+  // issues, which is what the section showed before.
+  assert.ok(cmd.includes('--involves @me'), 'Recent must be scoped to the user')
   assert.match(cmd, /--sort updated/)
   assert.match(cmd, /--order desc/)
   assert.match(cmd, /--limit 30/)
   assert.ok(!cmd.includes('--updated-desc'), 'gh has no --updated-desc flag')
 })
 
-test('mentioned issues uses --involves, not a search string', () => {
+test('mentioned issues asks for literal mentions', () => {
   const cmd = mentionedIssuesSearchCmd('open')
-  assert.match(cmd, /gh search issues/)
-  assert.match(cmd, /--involves @me/)
+  assert.ok(cmd.includes('--mentions @me'), 'Mentioned must use --mentions')
   assert.match(cmd, /--limit 5/)
   assert.ok(!cmd.includes('--search '), 'gh search issues has no --search flag')
 })
@@ -36,6 +33,15 @@ test('the state filter still maps open, closed and all', () => {
   assert.ok(!mentionedIssuesSearchCmd('all').includes('--state'))
 })
 
+test('the two sections do not collapse into the same query', () => {
+  // --involves covers authored, assigned, mentioned and reviewed. Using it for
+  // both made Mentioned a duplicate of Recent with a smaller limit.
+  assert.notEqual(
+    recentIssuesSearchCmd('open').replace('--limit 30', ''),
+    mentionedIssuesSearchCmd('open').replace('--limit 5', ''),
+  )
+})
+
 test('every flag exists in gh search issues --help', () => {
   let help = ''
   try {
@@ -46,15 +52,13 @@ test('every flag exists in gh search issues --help', () => {
   const known = new Set(help.split(/[\s,()[\]|=]+/).filter(Boolean))
   for (const cmd of [recentIssuesSearchCmd('open'), mentionedIssuesSearchCmd('open')]) {
     const flags = [...new Set(cmd.match(/--[a-z][a-z-]*/g) || [])]
-    const unknown = flags.filter(flag => !known.has(flag))
-    assert.deepEqual(unknown, [], `unknown flags in: ${cmd}`)
+    assert.deepEqual(flags.filter(flag => !known.has(flag)), [], `unknown flags in: ${cmd}`)
   }
 })
 
 test('recent issues reads through the big-payload path', () => {
-  // 30 rows with url, author and repository serialise to ~12 KB. The gateway
-  // caps shell.exec stdout near 4 KB, and sh() returns whatever survived, so a
-  // capped read truncates the JSON mid-string and parses as nothing.
+  // 30 rows with url, author and repository serialise past the gateway's 4 KB
+  // stdout cap, and a capped read truncates the JSON mid-string.
   const start = source.indexOf('function useRecentIssues')
   const body = source.slice(start, source.indexOf('\nfunction ', start + 1))
   assert.ok(body.includes('shJsonBig('), 'Recent must use shJsonBig for its 30-row payload')
