@@ -1647,19 +1647,20 @@ function useCreatedIssues(state) {
 function useRecentIssues(state) {
   const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'recent-issues', state],
+    queryKey: [ID, 'recent-issues', 'v2', state],
     queryFn: async () => {
       const out = await sh(recentIssuesSearchCmd(state))
       try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
     },
     staleTime: 60_000,
+    refetchOnMount: 'always',
   })
 }
 
 function useMentionedIssues(state) {
   const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'mentioned-issues', state],
+    queryKey: [ID, 'mentioned-issues', 'v2', state],
     queryFn: async () => {
       try {
         const out = await sh(mentionedIssuesSearchCmd(state))
@@ -1667,6 +1668,7 @@ function useMentionedIssues(state) {
       } catch { return [] }
     },
     staleTime: 60_000,
+    refetchOnMount: 'always',
   })
 }
 function useNeedsActionPrs() {
