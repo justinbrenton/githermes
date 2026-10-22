@@ -8,11 +8,12 @@ import {
   prReadyToMerge,
   parseTeamSlugs,
   dedupePrs,
-  reviewRequestedSearchCmd,
-  teamReviewSearchCmd,
-  draftSearchCmd,
+  inboxPrsCmd,
+  inboxSearchQuery,
+  inboxTeamSearch,
+  INBOX_SEARCHES,
   inboxAuthoredPrsCmd,
-  parseInboxAuthoredPrs,
+  parseInboxPrs,
   withoutDuplicates,
   filterInboxList,
 } from '../desktop/plugin.js'
@@ -107,57 +108,69 @@ test('waiting and ready never claim the same PR', () => {
   }
 })
 
-test('review-requested search asks the right question', () => {
-  const cmd = reviewRequestedSearchCmd()
-  // The Inbox is global: no --repo, so every repository is searched.
-  assert.ok(!cmd.includes('--repo'), cmd)
-  assert.match(cmd, /gh search prs --review-requested @me --state open --limit 30 /)
-  // `gh search prs --json` has no reviewDecision or statusCheckRollup, so the
-  // command must not ask for them or GitHub errors out and the section empties.
-  assert.ok(cmd.endsWith('--json number,title,state,author,updatedAt,url,repository,isDraft'))
-})
-
-test('a repo can still be passed explicitly when a caller wants one', () => {
-  assert.match(reviewRequestedSearchCmd('justinbrenton/githermes'), /--repo 'justinbrenton\/githermes'/)
-})
-
-test('team review search is repo-scoped and quotes hostile team names', () => {
-  assert.match(teamReviewSearchCmd('justinbrenton/githermes', 'platform'), /--repo 'justinbrenton\/githermes' --review-requested 'platform' --state open --limit 20 /)
-  assert.ok(teamReviewSearchCmd('o/r', "x'; rm -rf ~").includes("'x'\\''; rm -rf ~'"))
-})
-
-test('draft search keeps --draft and the search field set', () => {
-  const cmd = draftSearchCmd()
-  assert.ok(!cmd.includes('--repo'), cmd)
-  assert.match(cmd, /gh search prs --author @me --draft --state open --limit 30 /)
-  assert.ok(!cmd.includes('statusCheckRollup'))
-})
-
-test('the authored PR read is GraphQL and carries the status fields', () => {
-  const cmd = inboxAuthoredPrsCmd()
-  assert.match(cmd, /gh api graphql/)
-  assert.ok(!cmd.includes('--repo'), 'the inbox spans every repository')
-  for (const field of ['reviewDecision', 'mergeable', 'statusCheckRollup']) {
-    assert.ok(cmd.includes(field), `missing ${field}: ${cmd}`)
+test('every inbox section reads one GraphQL search with the PR tab field set', () => {
+  // The Inbox used to run `gh search prs`, which returns no additions,
+  // deletions, changedFiles or status fields, so its cards rendered fewer
+  // identifiers than the PR tab. All sections now share one shape.
+  for (const search of [INBOX_SEARCHES.review, INBOX_SEARCHES.drafts, INBOX_SEARCHES.mine]) {
+    const cmd = inboxPrsCmd(search)
+    assert.match(cmd, /gh api graphql/)
+    assert.ok(!cmd.includes('--repo'), 'the inbox spans every repository')
+    for (const field of [
+      'reviewDecision', 'mergeable', 'statusCheckRollup',
+      'additions', 'deletions', 'changedFiles', 'headRefName',
+      'labels(first:12){nodes{name color}}',
+      'repository{name nameWithOwner}', 'author{login}',
+    ]) {
+      assert.ok(cmd.includes(field), `missing ${field} for ${search}`)
+    }
   }
 })
 
-test('parseInboxAuthoredPrs flattens the GraphQL search envelope', () => {
+test('the inbox searches are the queries the sections promise', () => {
+  assert.match(INBOX_SEARCHES.review, /^is:pr state:open review-requested:@me$/)
+  assert.match(INBOX_SEARCHES.drafts, /draft:true/)
+  assert.match(INBOX_SEARCHES.mine, /^is:pr state:open author:@me$/)
+  assert.match(inboxTeamSearch('acme/platform'), /review-requested:acme\/platform/)
+  // Archived repositories are excluded, matching github.com.
+  assert.match(inboxSearchQuery(INBOX_SEARCHES.mine), /archived:false/)
+})
+
+test('a quote in a search string cannot break out of the GraphQL literal', () => {
+  const query = inboxSearchQuery('is:pr author:"x')
+  assert.ok(!query.includes('author:"x'), query)
+})
+
+test('the authored PR read is a GraphQL search', () => {
+  const cmd = inboxAuthoredPrsCmd()
+  assert.match(cmd, /gh api graphql/)
+  assert.ok(!cmd.includes('--repo'), 'the inbox spans every repository')
+})
+
+test('parseInboxPrs flattens the GraphQL search envelope into the row shape', () => {
   const json = { data: { search: { nodes: [
     null,
     {
       number: 16, title: 'fix', url: 'u', isDraft: false, state: 'OPEN',
       updatedAt: '2026-10-21T00:00:00Z', reviewDecision: null, mergeable: 'MERGEABLE',
+      additions: 335, deletions: 50, changedFiles: 10, headRefName: 'merge/upstream-main',
       repository: { name: 'githermes', nameWithOwner: 'justinbrenton/githermes' },
-      author: { login: 'justinbrenton' }, statusCheckRollup: { state: 'SUCCESS' },
+      author: { login: 'justinbrenton' },
+      statusCheckRollup: { state: 'SUCCESS' },
+      labels: { nodes: [{ name: 'bug', color: 'd73a4a' }, null] },
     },
   ] } } }
-  const rows = parseInboxAuthoredPrs(json)
+  const rows = parseInboxPrs(json)
   assert.equal(rows.length, 1)
-  assert.equal(rows[0].repository.nameWithOwner, 'justinbrenton/githermes')
-  assert.equal(rows[0].statusCheckRollup.state, 'SUCCESS')
-  assert.deepEqual(parseInboxAuthoredPrs({ data: { search: null } }), [])
-  assert.deepEqual(parseInboxAuthoredPrs(null), [])
+  const row = rows[0]
+  assert.equal(row.repository.nameWithOwner, 'justinbrenton/githermes')
+  assert.equal(row.statusCheckRollup.state, 'SUCCESS')
+  assert.equal(row.additions, 335)
+  assert.equal(row.changedFiles, 10)
+  assert.equal(row.headRefName, 'merge/upstream-main')
+  assert.deepEqual(row.labels, [{ name: 'bug', color: 'd73a4a' }])
+  assert.deepEqual(parseInboxPrs({ data: { search: null } }), [])
+  assert.deepEqual(parseInboxPrs(null), [])
 })
 
 test('the team section drops rows the personal section already shows', () => {

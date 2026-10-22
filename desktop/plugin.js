@@ -1205,25 +1205,28 @@ export function isLookupMiss(allItems, exactN) {
 }
 
 export function parseListQuery(query) {
-  const authors = [], labels = []
+  const authors = [], labels = [], repos = []
   const text = String(query || '').replace(
-    /(^|\s)(author|label):(?:"((?:\\.|[^"\\])*)"|(\S+))/gi,
+    /(^|\s)(author|label|repo):(?:"((?:\\.|[^"\\])*)"|(\S+))/gi,
     (match, lead, field, quoted, bare) => {
       const value = String(quoted ?? bare).replace(/\\(["\\])/g, '$1').toLowerCase()
       if (!value) return match
-      const values = field.toLowerCase() === 'author' ? authors : labels
+      const key = field.toLowerCase()
+      const values = key === 'author' ? authors : key === 'label' ? labels : repos
       values.push(value)
       return lead
     },
   ).trim().replace(/\s+/g, ' ').toLowerCase()
-  return { authors, labels, text }
+  return { authors, labels, repos, text }
 }
 
 export function matchesListQuery(item, query) {
-  const { authors, labels, text } = parseListQuery(query)
+  const { authors, labels, repos, text } = parseListQuery(query)
   const author = String(item?.author?.login || '').toLowerCase()
+  const itemRepo = String(item?.repository?.nameWithOwner || item?.repository?.name || '').toLowerCase()
   const itemLabels = Array.isArray(item?.labels) ? item.labels.map(label => String(label?.name || '').toLowerCase()) : []
   if (authors.some(value => !author.includes(value))) return false
+  if (repos.some(value => !itemRepo.includes(value))) return false
   if (labels.some(value => !itemLabels.some(label => label.includes(value)))) return false
   if (!text) return true
   // #42 must not match #142 — exact number before substring
@@ -1533,41 +1536,40 @@ export function dedupePrs(list) {
   return out
 }
 
-// Command builders live outside the hooks so the exact `gh` invocation can be
-// asserted in tests without mounting React or touching the network. Field lists
-// differ by command: `gh search` has no reviewDecision or statusCheckRollup.
-const PR_SEARCH_FIELDS = 'number,title,state,author,updatedAt,url,repository,isDraft'
+// Command builders live outside the hooks so the exact query can be asserted in
+// tests without mounting React or touching the network.
+//
+// Every Inbox section reads through one GraphQL search. `gh search prs` has no
+// additions, deletions, changedFiles or status fields, so a section built on it
+// rendered cards with fewer identifiers than the PR tab. GraphQL returns all of
+// them, and one shape means one row component.
+const INBOX_PR_FIELDS = 'number title url isDraft state updatedAt reviewDecision mergeable additions deletions changedFiles headRefName repository{name nameWithOwner} author{login} statusCheckRollup{state} labels(first:12){nodes{name color}}'
 
 // Inbox queries are global: the tab is the user's inbox, so it spans every
-// repository. `--repo` is only added when a caller passes one.
-export function reviewRequestedSearchCmd(repo) {
-  return prSearchCmd(['--review-requested', '@me', '--state', 'open', '--limit', '30'], repo)
+// repository. Archived repositories stay out, as they do on github.com.
+export function inboxSearchQuery(search) {
+  const safe = String(search || '').replace(/"/g, '')
+  return `query{search(query:"${safe} archived:false",type:ISSUE,first:50){nodes{... on PullRequest{${INBOX_PR_FIELDS}}}}}`
 }
 
-export function teamReviewSearchCmd(repo, team) {
-  return prSearchCmd(['--review-requested', sq(team), '--state', 'open', '--limit', '20'], repo)
+export function inboxPrsCmd(search) {
+  return `${GH} api graphql -f query=${sq(inboxSearchQuery(search))}`
 }
 
-export function draftSearchCmd(repo) {
-  return prSearchCmd(['--author', '@me', '--draft', '--state', 'open', '--limit', '30'], repo)
+export const INBOX_SEARCHES = {
+  review: 'is:pr state:open review-requested:@me',
+  drafts: 'is:pr state:open author:@me draft:true',
+  mine: 'is:pr state:open author:@me',
 }
-
-function prSearchCmd(args, repo) {
-  return [GH, 'search', 'prs', repo ? `--repo ${sq(repo)}` : '', ...args, '--json', PR_SEARCH_FIELDS]
-    .filter(Boolean)
-    .join(' ')
+export function inboxTeamSearch(team) {
+  return `is:pr state:open review-requested:${String(team || '').trim()}`
 }
-
-// `gh search prs` returns no reviewDecision, mergeable or statusCheckRollup, so
-// the draft-and-status sections cannot be built from it. One GraphQL search
-// covers every repository at once and carries those three fields.
-const INBOX_AUTHORED_QUERY = 'query{search(query:"is:pr author:@me state:open",type:ISSUE,first:50){nodes{... on PullRequest{number title url isDraft state updatedAt reviewDecision mergeable repository{name nameWithOwner} author{login} statusCheckRollup{state}}}}}'
 
 export function inboxAuthoredPrsCmd() {
-  return `${GH} api graphql -f query=${sq(INBOX_AUTHORED_QUERY)}`
+  return inboxPrsCmd(INBOX_SEARCHES.mine)
 }
 
-export function parseInboxAuthoredPrs(json) {
+export function parseInboxPrs(json) {
   const nodes = json?.data?.search?.nodes
   if (!Array.isArray(nodes)) return []
   return nodes.filter(Boolean).map(node => ({
@@ -1579,11 +1581,16 @@ export function parseInboxAuthoredPrs(json) {
     updatedAt: node.updatedAt,
     reviewDecision: node.reviewDecision,
     mergeable: node.mergeable,
+    additions: node.additions,
+    deletions: node.deletions,
+    changedFiles: node.changedFiles,
+    headRefName: node.headRefName,
     repository: node.repository
       ? { name: node.repository.name, nameWithOwner: node.repository.nameWithOwner }
       : undefined,
     author: node.author ? { login: node.author.login } : undefined,
     statusCheckRollup: node.statusCheckRollup || undefined,
+    labels: Array.isArray(node.labels?.nodes) ? node.labels.nodes.filter(Boolean) : [],
   }))
 }
 
@@ -1607,64 +1614,48 @@ function prKey(item) {
   return String(item?.url || `${item?.repository?.nameWithOwner || ''}#${item?.number || ''}`)
 }
 
-function useReviewRequestedPrs() {
+// Every Inbox section reads the same GraphQL shape, so the row renderer is the
+// same wherever the section is declared.
+function useInboxSearch(queryKey, search) {
   return useQuery({
-    queryKey: [ID, 'review-requested-prs', 'v2'],
+    queryKey: [ID, queryKey, 'v3', search],
     staleTime: 60_000,
-    queryFn: async () => {
-      try {
-        const out = await sh(reviewRequestedSearchCmd())
-        try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
-      } catch { return [] }
-    },
+    refetchOnMount: 'always',
+    queryFn: async () => parseInboxPrs(await shJsonBig(inboxPrsCmd(search)).catch(() => null)),
   })
 }
+
+function useReviewRequestedPrs() {
+  return useInboxSearch('review-requested-prs', INBOX_SEARCHES.review)
+}
+
 function useTeamReviewRequestedPrs() {
   return useQuery({
-    queryKey: [ID, 'team-review-requested-prs', 'v2'],
+    queryKey: [ID, 'team-review-requested-prs', 'v3'],
     staleTime: 60_000,
+    refetchOnMount: 'always',
     queryFn: async () => {
-      // `gh search prs --review-requested` accepts a team, so the team list is
-      // the missing piece. `user/teams` needs the read:org scope; without it the
-      // call fails and the section stays empty rather than inventing rows.
+      // `user/teams` needs the read:org scope; without it the section stays
+      // empty rather than inventing rows.
       const teamsRaw = await sh(`${GH} api user/teams --paginate --jq ${sq('[.[].slug]')}`).catch(() => '')
       const teams = parseTeamSlugs(teamsRaw).slice(0, 8)
       if (!teams.length) return []
-      const searches = teams.map(team => sh(teamReviewSearchCmd(null, team)).catch(() => ''))
-      const outputs = await Promise.all(searches)
-      const rows = []
-      for (const out of outputs) {
-        try { const parsed = JSON.parse(out); if (Array.isArray(parsed)) rows.push(...parsed) } catch {}
-      }
-      return dedupePrs(rows)
+      const outputs = await Promise.all(
+        teams.map(team => shJsonBig(inboxPrsCmd(inboxTeamSearch(team))).catch(() => null)),
+      )
+      return dedupePrs(outputs.flatMap(parseInboxPrs))
     },
   })
 }
+
 function useDraftPrs() {
-  return useQuery({
-    queryKey: [ID, 'draft-prs', 'v2'],
-    staleTime: 60_000,
-    queryFn: async () => {
-      try {
-        const out = await sh(draftSearchCmd())
-        try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
-      } catch { return [] }
-    },
-  })
+  return useInboxSearch('draft-prs', INBOX_SEARCHES.drafts)
 }
 
 // One global read of the user's open PRs, carrying the review decision, merge
 // state and check rollup that the three status sections need.
 function useMyAuthoredPrs() {
-  return useQuery({
-    queryKey: [ID, 'my-authored-prs', 'v2'],
-    staleTime: 60_000,
-    refetchOnMount: 'always',
-    queryFn: async () => {
-      const parsed = await shJsonBig(inboxAuthoredPrsCmd()).catch(() => null)
-      return parseInboxAuthoredPrs(parsed)
-    },
-  })
+  return useInboxSearch('my-authored-prs', INBOX_SEARCHES.mine)
 }
 function useAssignedPrs() {
   return useQuery({
@@ -1769,6 +1760,52 @@ function useAssignedIssues(state) {
   })
 }
 
+// One card for both tabs. The PR list and the Inbox show the same identifiers,
+// so they render through the same component; `showRepo` adds the repository
+// token, which only the Inbox needs because the PR tab is already one repo.
+function PrListRow({ pr, onOpen, onFilter, showRepo = false }) {
+  const pill = STATE_PILL[prStateKey(pr)] || STATE_PILL.open
+  const repoName = pr?.repository?.nameWithOwner || pr?.repository?.name || ''
+  return jsxs('div', {
+    role: 'button',
+    tabIndex: 0,
+    onClick: onOpen,
+    onKeyDown: event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        onOpen()
+      }
+    },
+    className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start cursor-pointer',
+    children: [
+      jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: pr.author?.login, size: 24 }) }),
+      jsxs('span', { className: 'min-w-0 flex-1', children: [
+        jsxs('span', { className: 'gh-row-open flex w-full items-center gap-1.5 text-left', children: [
+          jsx(Codicon, { name: pill.icon, size: 14, style: { color: pill.bg }, title: pill.label, className: 'shrink-0' }),
+          jsx(ItemTitle, { title: pr.title, number: pr.number }),
+        ] }),
+        jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
+          pr.author?.login
+            ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => onFilter(event, 'author', pr.author.login), children: `@${pr.author.login}` })
+            : null,
+          showRepo && repoName
+            ? jsx('button', { type: 'button', className: 'gh-filter-token rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', onClick: event => onFilter(event, 'repo', repoName), children: repoName })
+            : null,
+          ...(Array.isArray(pr.labels)
+            ? pr.labels.map(label => jsx(LabelChip, { label, onClick: event => onFilter(event, 'label', label.name) }, label.name || label.id))
+            : []),
+          pr.headRefName ? jsx('span', { className: 'rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', children: pr.headRefName }) : null,
+          jsx(DiffCount, { add: pr.additions, del: pr.deletions }),
+          jsx('span', { children: `${pr.changedFiles ?? 0} files` }),
+          jsx('span', { className: 'text-(--ui-text-quaternary)', children: ago(pr.updatedAt) }),
+          jsx(StatusDots, { pr }),
+        ] }),
+      ] }),
+      jsx(Codicon, { name: 'chevron-right', className: 'gh-card-arrow mt-1 shrink-0', 'aria-hidden': true }),
+    ],
+  })
+}
+
 function InboxView({ repo }) {
   const query = useValue($listQuery)
   const [collapsed, toggleSection] = useCollapsedSections()
@@ -1791,40 +1828,19 @@ function InboxView({ repo }) {
   const sectionClass = 'mb-5 pb-4 border-b border-(--ui-stroke-secondary) last:border-0 last:pb-0'
   const subClass = 'text-[11px] text-(--ui-text-tertiary) leading-4 mt-0.5'
 
-  const prRow = p => {
-    const prRepo = (p.repository && p.repository.nameWithOwner) ? p.repository.nameWithOwner : (repo || '')
-    const stateKey = (String(p.state || '').toLowerCase() === 'merged' ? 'merged' : String(p.state || '').toLowerCase() === 'closed' ? 'closed' : 'open')
-    const pill = STATE_PILL[stateKey] || STATE_PILL.open
-    return jsxs('button', {
-      type: 'button',
-      key: p.url || `${prRepo}#${p.number}`,
-      onClick: () => navigateToSessionPr(prRepo, p.number),
-      className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent',
-      children: [
-        jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: p.author?.login, size: 24 }) }),
-        jsxs('span', { className: 'min-w-0 flex-1', children: [
-          jsxs('span', { className: 'gh-row-open flex w-full items-center gap-1.5 text-left', children: [
-            jsx(Codicon, { name: p.isDraft ? 'git-pull-request-draft' : pill.icon, size: 14, style: { color: pill.bg }, title: p.isDraft ? 'Draft' : pill.label, className: 'shrink-0' }),
-            jsx(ItemTitle, { title: p.title, number: p.number }),
-          ] }),
-          jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
-            p.author?.login ? jsx('span', { className: 'font-medium', children: `@${p.author.login}` }) : null,
-            jsx('span', { className: 'rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', children: p.repository?.name || (repo ? String(repo).split('/')[1] : '—') }),
-            jsx('span', { className: 'text-(--ui-text-quaternary)', children: '·' }),
-            jsx('span', { children: ago(p.updatedAt) || new Date(p.updatedAt || '').toLocaleDateString() }),
-          ] }),
-        ] }),
-        jsx(Codicon, { name: 'chevron-right', className: 'mt-1 shrink-0 text-(--ui-text-quaternary)', 'aria-hidden': true }),
-      ],
-    })
-  }
+  const openPr = pr => navigateToSessionPr(pr?.repository?.nameWithOwner || repo || '', pr.number)
 
   const section = (key, icon, title, q, list, emptyText) => jsxs('section', {
     className: sectionClass,
     children: [
       jsx(SectionHeader, { icon, title, count: list.length, collapsed: !!collapsed[key], onToggle: () => toggleSection(key) }),
       collapsed[key] ? null : list.length
-        ? list.map(prRow)
+        ? list.map(pr => jsx(PrListRow, {
+          pr,
+          showRepo: true,
+          onFilter: setListFilter,
+          onOpen: () => openPr(pr),
+        }, String(pr.url || `${pr?.repository?.nameWithOwner || ''}#${pr.number}`)))
         : q.isLoading && !q.data
           ? jsx('p', { className: subClass + ' px-3', children: 'Loading…' })
           : jsx('p', { className: subClass + ' px-3 italic', children: emptyText }),
@@ -3582,36 +3598,11 @@ function PrList({ repo, onOpen, query, active = true }) {
           jsx('span', { className: 'font-normal text-(--ui-text-quaternary)', children: `Showing latest ${allItems.length}` }),
           jsx(Badge, { variant: 'secondary', className: 'ml-auto h-5 min-w-5 justify-center text-[10px]', children: String(items.length) }),
         ] }),
-        ...items.map(pr =>
-        jsxs('div', {
-          onClick: () => onOpen(pr.number),
-          className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start',
-          children: [
-            jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: pr.author?.login, size: 24 }) }),
-            jsxs('span', {
-              className: 'min-w-0 flex-1',
-              children: [
-                jsxs('button', { type: 'button', className: 'gh-row-open flex w-full items-center gap-1.5 text-left', children: [
-                  // State indicator reuses the detail pill's table (icon + color +
-                  // tooltip label), so open/draft/merged/closed read at a glance.
-                  jsx(Codicon, { name: (STATE_PILL[prStateKey(pr)] || STATE_PILL.open).icon, size: 14, style: { color: (STATE_PILL[prStateKey(pr)] || STATE_PILL.open).bg }, title: (STATE_PILL[prStateKey(pr)] || STATE_PILL.open).label, className: 'shrink-0' }),
-                  jsx(ItemTitle, { title: pr.title, number: pr.number }),
-                ] }),
-                jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
-                  pr.author?.login ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => setListFilter(event, 'author', pr.author?.login), children: `@${pr.author.login}` }) : null,
-                  ...(Array.isArray(pr.labels) ? pr.labels.map(l => jsx(LabelChip, { label: l, onClick: event => setListFilter(event, 'label', l.name) }, l.name || l.id)) : []),
-                  jsx('span', { className: 'rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', children: pr.headRefName || '—' }),
-                  jsx(DiffCount, { add: pr.additions, del: pr.deletions }),
-                  jsx('span', { children: `${pr.changedFiles ?? 0} files` }),
-                  jsx('span', { className: 'text-(--ui-text-quaternary)', children: ago(pr.updatedAt) }),
-                  jsx(StatusDots, { pr }),
-                ] }),
-              ],
-            }),
-            jsx(Codicon, { name: 'chevron-right', className: 'gh-card-arrow mt-1 shrink-0', 'aria-hidden': true }),
-          ],
-        }, String(pr.number))
-      ),
+        ...items.map(pr => jsx(PrListRow, {
+          pr,
+          onFilter: setListFilter,
+          onOpen: () => onOpen(pr.number),
+        }, String(pr.number))),
         ListMoreFooter({ q, limit, setLimit, allItems }),
       ],
     }),
