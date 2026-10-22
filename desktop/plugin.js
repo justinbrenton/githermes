@@ -3246,19 +3246,14 @@ const SAFE_URL = /^https?:\/\//i
 const HTML_COMMENT = /<!--[\s\S]*?-->/g
 const HTML_TAG = /<\/?[a-zA-Z][^>]*>/g
 
-// CodeQL js/incomplete-multi-character-sanitization: one pass over a
-// multi-character pattern can rebuild the sequence it just removed, so
-// `<!<!-- c -->-->` came out as `<!-->`. Repeat until the string stops
-// shrinking, then drop any surviving `<` so no tag or comment opener can be
-// reassembled at all. `>` is left alone because blockquote lines start with it.
+// CodeQL js/incomplete-multi-character-sanitization: removing a multi-character
+// sequence can rebuild it (`<!<!-- c -->-->` -> `<!-->`). The returned value
+// therefore ends with a single-character strip of `<`, so no tag or comment
+// opener can survive regardless of what the passes above leave behind. `>` is
+// untouched because blockquote lines begin with it.
 export function stripHtml(text) {
-  let out = String(text ?? '')
-  let previous
-  do {
-    previous = out
-    out = out.replace(HTML_COMMENT, '').replace(HTML_TAG, '')
-  } while (out !== previous)
-  return out.replace(/</g, '')
+  const withoutMarkup = String(text ?? '').replace(HTML_COMMENT, '').replace(HTML_TAG, '')
+  return withoutMarkup.replace(/</g, '')
 }
 const INLINE_RE = /(`[^`\n]+`|\*\*[^*]+\*\*|__[^_]+__|~~[^~\n]+~~|\*[^*\n]+\*|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|https?:\/\/[^\s)]+)/g
 
