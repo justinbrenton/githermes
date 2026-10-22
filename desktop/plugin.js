@@ -1687,7 +1687,18 @@ function issueSearchCmd(args) {
   return [GH, 'search', 'issues', ...args].filter(Boolean).join(' ')
 }
 
-const ISSUE_SEARCH_FIELDS = 'number,title,state,author,updatedAt,url,repository'
+// The card renders the author and the label chips, so every section has to ask
+// for exactly the fields the Issues tab asks for. `labels` was missing, which is
+// why All Issues cards rendered no label row at all.
+const ISSUE_SEARCH_FIELDS = 'number,title,state,author,updatedAt,url,repository,labels'
+
+export function assignedIssuesSearchCmd(state) {
+  return issueSearchCmd(['--assignee', '@me', issueSearchStateArg(state), '--limit', '30', '--json', ISSUE_SEARCH_FIELDS])
+}
+
+export function createdIssuesSearchCmd(state) {
+  return issueSearchCmd(['--author', '@me', issueSearchStateArg(state), '--limit', '30', '--json', ISSUE_SEARCH_FIELDS])
+}
 
 // `gh search issues` has no --updated-desc. Newest first is --sort/--order.
 // `--involves @me` keeps the section to issues the user actually touches;
@@ -1705,19 +1716,19 @@ export function mentionedIssuesSearchCmd(state) {
 }
 
 function useCreatedIssues(state) {
-  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'created-issues', state],
-    queryFn: async () => {
-      const out = await sh(issueSearchCmd(['--author', '@me', flag, '--limit', '30', '--json', 'number,title,state,author,updatedAt,url,repository']))
-      try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
-    },
+    queryKey: [ID, 'created-issues', 'v4', state],
     staleTime: 60_000,
+    refetchOnMount: 'always',
+    queryFn: async () => {
+      const parsed = await shJsonBig(createdIssuesSearchCmd(state)).catch(() => null)
+      return Array.isArray(parsed) ? parsed : []
+    },
   })
 }
 function useRecentIssues(state) {
   return useQuery({
-    queryKey: [ID, 'recent-issues', 'v3', state],
+    queryKey: [ID, 'recent-issues', 'v4', state],
     queryFn: async () => {
       // 30 rows with url/author/repository can pass the gateway's 4 KB stdout
       // cap that sh() inherits, which truncates the JSON mid-string.
@@ -1731,12 +1742,10 @@ function useRecentIssues(state) {
 
 function useMentionedIssues(state) {
   return useQuery({
-    queryKey: [ID, 'mentioned-issues', 'v3', state],
+    queryKey: [ID, 'mentioned-issues', 'v4', state],
     queryFn: async () => {
-      try {
-        const out = await sh(mentionedIssuesSearchCmd(state))
-        try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
-      } catch { return [] }
+      const parsed = await shJsonBig(mentionedIssuesSearchCmd(state)).catch(() => null)
+      return Array.isArray(parsed) ? parsed : []
     },
     staleTime: 60_000,
     refetchOnMount: 'always',
@@ -1746,17 +1755,16 @@ function listOf(value) {
   return Array.isArray(value) ? value : []
 }
 function useAssignedIssues(state) {
-  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'assigned-issues', state],
-    queryFn: async () => {
-      const out = await sh(issueSearchCmd(['--assignee', '@me', flag, '--limit', '30', '--json', 'number,title,state,author,updatedAt,url,repository']))
-      try {
-        const parsed = JSON.parse(out)
-        return Array.isArray(parsed) ? parsed : []
-      } catch { return [] }
-    },
+    queryKey: [ID, 'assigned-issues', 'v4', state],
     staleTime: 60_000,
+    refetchOnMount: 'always',
+    queryFn: async () => {
+      // Same capped-stdout trap as Recent: 30 rows with labels and a repo can
+      // pass 4 KB, and a truncated read parses as nothing.
+      const parsed = await shJsonBig(assignedIssuesSearchCmd(state)).catch(() => null)
+      return Array.isArray(parsed) ? parsed : []
+    },
   })
 }
 

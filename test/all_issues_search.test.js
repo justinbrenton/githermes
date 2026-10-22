@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { recentIssuesSearchCmd, mentionedIssuesSearchCmd } from '../desktop/plugin.js'
+import { recentIssuesSearchCmd, mentionedIssuesSearchCmd, assignedIssuesSearchCmd, createdIssuesSearchCmd } from '../desktop/plugin.js'
 
 const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
 
@@ -68,4 +68,30 @@ test('recent issues reads through the big-payload path', () => {
   const body = source.slice(start, source.indexOf('\nfunction ', start + 1))
   assert.ok(body.includes('shJsonBig('), 'Recent must use shJsonBig for its 30-row payload')
   assert.ok(!body.includes('await sh('), 'Recent must not read through the capped sh()')
+})
+
+test('every All Issues section asks for the fields its card renders', () => {
+  // The card draws the author and the label chips. `labels` was absent from all
+  // four queries, so All Issues cards rendered no label row at all, while the
+  // Issues tab (which asks gh issue list for labels) showed them.
+  const expected = 'number,title,state,author,updatedAt,url,repository,labels'
+  for (const [name, cmd] of Object.entries({
+    assigned: assignedIssuesSearchCmd('open'),
+    created: createdIssuesSearchCmd('open'),
+    recent: recentIssuesSearchCmd('open'),
+    mentioned: mentionedIssuesSearchCmd('open'),
+  })) {
+    assert.ok(cmd.endsWith('--json ' + expected), `${name} is missing a card field: ${cmd}`)
+  }
+})
+
+test('every All Issues section reads through the big-payload path', () => {
+  // 30 rows with labels and a repository pass the gateway's 4 KB stdout cap;
+  // a capped read truncates the JSON and parses as nothing.
+  for (const hook of ['useAssignedIssues', 'useCreatedIssues', 'useRecentIssues', 'useMentionedIssues']) {
+    const start = source.indexOf(`function ${hook}(`)
+    const body = source.slice(start, source.indexOf(String.fromCharCode(10) + 'function ', start + 1))
+    assert.ok(body.includes('shJsonBig('), `${hook} must use shJsonBig`)
+    assert.ok(!body.includes('await sh('), `${hook} must not read through the capped sh()`)
+  }
 })
