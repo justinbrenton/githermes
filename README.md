@@ -3,7 +3,7 @@
 GitHub pull requests and issues in a side pane inside Hermes Desktop.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Hermes Desktop: 0.22.2+](https://img.shields.io/badge/hermes%20desktop-0.22.2%2B-6b46c1.svg)](https://hermes-agent.nousresearch.com/docs/user-guide/desktop)
+[![Hermes Desktop: v0.22.1+](https://img.shields.io/badge/hermes%20desktop-0.22.1%2B-6b46c1.svg)](https://hermes-agent.nousresearch.com/docs/user-guide/desktop)
 
 GitHermes puts the review work you already do in a browser tab next to the code you are reading. Open a pull request, read the conversation, check CI, look at the diff hunks, and merge it without leaving the editor. Issues get the same treatment, with label chips in their real colors and a state filter.
 
@@ -88,7 +88,7 @@ The state filter maps onto `gh search` flags, which understand `open` and `close
 
 ## Requirements
 
-- Hermes Desktop 0.22.2 or newer
+- Hermes Desktop 0.22.1 or newer
 - The [GitHub CLI](https://cli.github.com/), installed and signed in. Check with `gh auth status`
 
 There is no build step and no dependency of its own to install.
