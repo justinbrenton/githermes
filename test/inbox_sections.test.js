@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  ciState,
   prCheckFailed,
   prChecksPass,
   prNeedsAction,
@@ -211,4 +212,20 @@ test('dedupePrs keeps the first row per url', () => {
   const dup = pr({ number: 9, url: 'u1' })
   assert.deepEqual(dedupePrs([a, b, dup]).map(p => p.number), [1, 2])
   assert.deepEqual(dedupePrs(null), [])
+})
+
+test('ciState reads both the gh array and the GraphQL aggregate shape', () => {
+  // `gh pr list` returns an array of check runs; the Inbox GraphQL query returns
+  // the aggregate StatusCheckRollup object. Reading only the array form made
+  // every Inbox card report "No CI configured" beside a passing PR tab card.
+  assert.equal(ciState({ state: 'SUCCESS' }), 'passing')
+  assert.equal(ciState({ state: 'FAILURE' }), 'failing')
+  assert.equal(ciState({ state: 'ERROR' }), 'failing')
+  assert.equal(ciState({ state: 'PENDING' }), 'pending')
+  assert.equal(ciState([{ status: 'COMPLETED', conclusion: 'SUCCESS' }]), 'passing')
+  assert.equal(ciState([{ status: 'IN_PROGRESS', conclusion: null }]), 'pending')
+  assert.equal(ciState([{ __typename: 'StatusContext', state: 'SUCCESS' }]), 'passing')
+  assert.equal(ciState([]), 'none')
+  assert.equal(ciState(null), 'none')
+  assert.equal(ciState(undefined), 'none')
 })

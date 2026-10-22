@@ -1118,13 +1118,16 @@ const CI_PENDING = new Set(['QUEUED', 'IN_PROGRESS', 'WAITING', 'REQUESTED', 'PE
 const CI_PASSING = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED'])
 
 export function ciState(rollup) {
-  const checks = Array.isArray(rollup) ? rollup : []
+  // Two shapes arrive here: `gh pr list` returns an array of check runs, while
+  // GraphQL returns the aggregate StatusCheckRollup object `{ state }`. Reading
+  // only the array form made every Inbox card report "No CI configured".
+  const checks = checkEntries(rollup)
   if (!checks.length) return 'none'
   let pending = false
   for (const c of checks) {
-    const raw = c?.__typename === 'StatusContext'
-      ? c.state
-      : String(c?.status || '').toUpperCase() === 'COMPLETED' ? c.conclusion : c.status
+    // CheckRun: conclusion when completed, status while queued or running.
+    // StatusContext and the GraphQL aggregate object carry `state` instead.
+    const raw = c?.conclusion || c?.state || c?.status
     const s = String(raw || '').toUpperCase()
     if (CI_FAILURES.has(s)) return 'failing'
     if (CI_PENDING.has(s) || !CI_PASSING.has(s)) pending = true
