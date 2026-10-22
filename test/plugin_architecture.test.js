@@ -278,6 +278,20 @@ test('PR list rows carry a state indicator open/draft/merged/closed', () => {
   assert.ok(row.includes('style: { color: pill.bg }'), 'indicator colors come from the state table')
 })
 
+test('the Inbox and the PR tab render the identical card', () => {
+  const inbox = source.slice(source.indexOf('function InboxView'), source.indexOf('function useCollapsedSections'))
+  const prs = source.slice(source.indexOf('function PrList({'), source.indexOf('function IssueList'))
+  for (const [name, list] of [['inbox', inbox], ['prs', prs]]) {
+    assert.ok(list.includes('jsx(PrListRow, {'), `${name}: must render the shared card`)
+  }
+  // A per-tab prop is how the cards drifted apart last time: the Inbox printed
+  // the full repository where the PR tab prints the branch.
+  assert.ok(!source.includes('showRepo'), 'no per-tab card variant is allowed')
+  const card = source.slice(source.indexOf('function PrListRow'), source.indexOf('function InboxView'))
+  assert.ok(card.includes('pr.headRefName'), 'the branch name is the mono token')
+  assert.ok(!card.includes('nameWithOwner'), 'the card must not print a full repo name')
+})
+
 test('Repo picker rows drag to reorder and the order persists', () => {
   const picker = source.slice(source.indexOf('function RepoPicker'), source.indexOf('export function labelTextColor'))
   const shell = source.slice(source.indexOf('function useGitHubShellState'), source.indexOf('function useListKeyboardFlow'))

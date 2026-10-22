@@ -1760,12 +1760,11 @@ function useAssignedIssues(state) {
   })
 }
 
-// One card for both tabs. The PR list and the Inbox show the same identifiers,
-// so they render through the same component; `showRepo` adds the repository
-// token, which only the Inbox needs because the PR tab is already one repo.
-function PrListRow({ pr, onOpen, onFilter, showRepo = false }) {
+// One card for both tabs. The PR list and the Inbox show the same identifiers
+// in the same order, so they render through the same component; the branch name
+// is the mono token on both, not the repository.
+function PrListRow({ pr, onOpen, onFilter }) {
   const pill = STATE_PILL[prStateKey(pr)] || STATE_PILL.open
-  const repoName = pr?.repository?.nameWithOwner || pr?.repository?.name || ''
   return jsxs('div', {
     role: 'button',
     tabIndex: 0,
@@ -1787,9 +1786,6 @@ function PrListRow({ pr, onOpen, onFilter, showRepo = false }) {
         jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
           pr.author?.login
             ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => onFilter(event, 'author', pr.author.login), children: `@${pr.author.login}` })
-            : null,
-          showRepo && repoName
-            ? jsx('button', { type: 'button', className: 'gh-filter-token rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', onClick: event => onFilter(event, 'repo', repoName), children: repoName })
             : null,
           ...(Array.isArray(pr.labels)
             ? pr.labels.map(label => jsx(LabelChip, { label, onClick: event => onFilter(event, 'label', label.name) }, label.name || label.id))
@@ -1837,7 +1833,6 @@ function InboxView({ repo }) {
       collapsed[key] ? null : list.length
         ? list.map(pr => jsx(PrListRow, {
           pr,
-          showRepo: true,
           onFilter: setListFilter,
           onOpen: () => openPr(pr),
         }, String(pr.url || `${pr?.repository?.nameWithOwner || ''}#${pr.number}`)))
