@@ -122,18 +122,26 @@ test('Issue #31: pane and page wire the shared list keyboard flow', () => {
 })
 
 test('Issue #30: list filter tokens keep row and token actions separate', () => {
-  const lists = source.slice(source.indexOf('function PrList'), source.indexOf('function DetailToolbar'))
-  assert.equal((lists.match(/jsxs\('div', \{\n\s+onClick: \(\) => onOpen\(/g) || []).length, 2)
-  assert.equal((lists.match(/className: 'gh-row-open/g) || []).length, 2)
-  assert.ok(lists.includes("setListFilter(event, 'author', pr.author?.login)"))
-  assert.ok(lists.includes("setListFilter(event, 'label', l.name)"))
+  // The row is a div with a click handler, never a button, so the author and
+  // label tokens inside it stay reachable as their own controls.
+  const row = source.slice(source.indexOf('function PrListRow'), source.indexOf('function InboxView'))
+  assert.ok(row.includes("role: 'button'"), 'row opens on click through a div')
+  assert.ok(row.includes("onFilter(event, 'author'"), 'author token must filter')
+  assert.ok(row.includes("onFilter(event, 'label'"), 'label token must filter')
+  assert.equal((source.match(/onFilter: setListFilter/g) || []).length, 2, 'both tabs share the filter handler')
+  assert.ok(source.includes('$listQuery.set(`${field}:${JSON.stringify(String(value))}`)'))
 })
 
 test('List filters fetch and expose the same author/label scopes', () => {
-  const lists = source.slice(source.indexOf('function PrList'), source.indexOf('function DetailToolbar'))
+  const lists = source.slice(source.indexOf('function PrList({'), source.indexOf('function DetailToolbar'))
+  const row = source.slice(source.indexOf('function PrListRow'), source.indexOf('function InboxView'))
   assert.ok(lists.includes('reviewDecision,statusCheckRollup,labels`'))
-  assert.equal((lists.match(/setListFilter\(event, 'author'/g) || []).length, 2)
-  assert.equal((lists.match(/setListFilter\(event, 'label'/g) || []).length, 2)
+  assert.ok(row.includes("onFilter(event, 'author'"))
+  assert.ok(row.includes("onFilter(event, 'label'"))
+  // The Inbox asks GraphQL for the same fields the PR tab reads from gh pr list.
+  for (const field of ['additions', 'deletions', 'changedFiles', 'headRefName', 'labels(first:12)']) {
+    assert.ok(source.includes(field), `Inbox field set lost ${field}`)
+  }
 })
 
 test('Issue #33: checkout copy action is wired only to loaded PR details', () => {
@@ -246,9 +254,9 @@ test('Issue #64 review: a pending manual check cannot revert a newer repo', () =
 })
 
 test('Issue #55: lists cap explicitly and load more on demand', () => {
-  const prs = source.slice(source.indexOf('function PrList'), source.indexOf('function IssueList'))
+  const prs = source.slice(source.indexOf('function PrList({'), source.indexOf('function IssueList'))
   const issues = source.slice(source.indexOf('function IssueList'), source.indexOf('function AssignToBot'))
-  const foot = source.slice(source.indexOf('function ListMoreFooter'), source.indexOf('function PrList'))
+  const foot = source.slice(source.indexOf('function ListMoreFooter'), source.indexOf('function PrList({'))
   assert.ok(foot.includes("children: 'Show more'"), 'footer: load-more missing')
   assert.ok(foot.includes("children: 'Retry'"), 'footer: retry missing')
   for (const [name, list] of [['prs', prs], ['issues', issues]]) {
@@ -264,10 +272,24 @@ test('Issue #55: lists cap explicitly and load more on demand', () => {
 })
 
 test('PR list rows carry a state indicator open/draft/merged/closed', () => {
-  const prs = source.slice(source.indexOf('function PrList'), source.indexOf('function IssueList'))
-  assert.ok(prs.includes('STATE_PILL[prStateKey(pr)]'), 'list must reuse the detail pill state table')
-  assert.ok(prs.includes('title: (STATE_PILL[prStateKey(pr)] || STATE_PILL.open).label'), 'indicator needs a tooltip label')
-  assert.ok(prs.includes('style: { color:'), 'indicator colors come from the state table')
+  const row = source.slice(source.indexOf('function PrListRow'), source.indexOf('function InboxView'))
+  assert.ok(row.includes('STATE_PILL[prStateKey(pr)]'), 'list must reuse the detail pill state table')
+  assert.ok(row.includes('title: pill.label'), 'indicator needs a tooltip label')
+  assert.ok(row.includes('style: { color: pill.bg }'), 'indicator colors come from the state table')
+})
+
+test('the Inbox and the PR tab render the identical card', () => {
+  const inbox = source.slice(source.indexOf('function InboxView'), source.indexOf('function useCollapsedSections'))
+  const prs = source.slice(source.indexOf('function PrList({'), source.indexOf('function IssueList'))
+  for (const [name, list] of [['inbox', inbox], ['prs', prs]]) {
+    assert.ok(list.includes('jsx(PrListRow, {'), `${name}: must render the shared card`)
+  }
+  // A per-tab prop is how the cards drifted apart last time: the Inbox printed
+  // the full repository where the PR tab prints the branch.
+  assert.ok(!source.includes('showRepo'), 'no per-tab card variant is allowed')
+  const card = source.slice(source.indexOf('function PrListRow'), source.indexOf('function InboxView'))
+  assert.ok(card.includes('pr.headRefName'), 'the branch name is the mono token')
+  assert.ok(!card.includes('nameWithOwner'), 'the card must not print a full repo name')
 })
 
 test('Repo picker rows drag to reorder and the order persists', () => {

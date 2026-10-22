@@ -282,9 +282,12 @@ test('Issue #30: parseListQuery extracts scoped tokens and free text', () => {
   assert.deepEqual(parseListQuery('Fix author:OctoCat label:"good first issue"'), {
     authors: ['octocat'],
     labels: ['good first issue'],
+    repos: [],
     text: 'fix',
   })
-  assert.deepEqual(parseListQuery('ordinary free text'), { authors: [], labels: [], text: 'ordinary free text' })
+  assert.deepEqual(parseListQuery('ordinary free text'), { authors: [], labels: [], repos: [], text: 'ordinary free text' })
+  // The Inbox repo token is a real filter: clicking a card's repo narrows the list.
+  assert.deepEqual(parseListQuery('repo:"acme/app"'), { authors: [], labels: [], repos: ['acme/app'], text: '' })
 })
 
 test('Issue #30: matchesListQuery scopes tokens and combines them with text', () => {
