@@ -69,7 +69,6 @@ Commits and the issue list:
 | Empty states | When a list is empty it says why and offers the next step: clear the search, show all items, switch item type, or open the repo on GitHub |
 | Collapsible sections | Every section in Inbox and All Issues opens and closes from its header. The state is saved, so a section you hide stays hidden after a restart |
 | Refresh indicator | Shows `Updated 2m ago` on a clock icon, and a spinner with `Updating...` while a fetch runs, so a slow query never looks like a stalled one |
-| Windows cold start | `bash.exe` discovery retries and caches its result, so the first `gh` call after a reboot works |
 
 The state filter maps onto `gh search` flags, which understand `open` and `closed` only, so "All" leaves the flag off entirely.
 
@@ -171,10 +170,6 @@ Run `gh auth status` in a terminal. The plugin inherits whatever `gh` has, so an
 
 Check that the repository in the picker is the one you expect. The pane scopes every query to the selected repo, and a stale selection looks like a broken click.
 
-### Windows: the first load after boot fails, then works
-
-Fixed in this fork. Update to the latest commit; the fix caches the resolved `bash.exe` path after the first successful probe.
-
 ### The pane is missing entirely
 
 Confirm the plugin is installed and enabled with `hermes plugins list`. If you copied the file by hand, check that it landed at `~/.hermes/desktop-plugins/githermes/plugin.js` and not one directory higher.
@@ -184,7 +179,6 @@ Confirm the plugin is installed and enabled with `hermes plugins list`. If you c
 - "Needs your team's review" needs a `gh` token with the `read:org` scope, because it reads your team list first. Without it that section stays empty while the other five keep working.
 - All Issues caps each section at 30 results and Mentioned at 5. The pane is built for one screen of rows, not a paginated archive.
 - No column customization, bulk actions, saved filters, command palette for pane actions, or multi-repo switcher. Those are ideas, not promises.
-- The Windows work covers `bash.exe` discovery only. Nothing else in the plugin is platform-specific.
 
 ## Development
 
@@ -199,7 +193,7 @@ Tailwind classes have to exist in the app's compiled CSS already. Arbitrary `var
 
 ## Credits
 
-GitHermes is built and maintained by [claudiumio](https://github.com/claudiumio). This fork adds the Inbox and All Issues views, the empty states and the Windows cold-start fix on top of that work. The plugin manifest still names claudiumio as author and points at the upstream repository, so the plugin id and its storage namespace stay the same for anyone moving between the two installs.
+GitHermes is built and maintained by [claudiumio](https://github.com/claudiumio). This fork adds the Inbox and All Issues views on top of that work. The plugin manifest still names claudiumio as author and points at the upstream repository, so the plugin id and its storage namespace stay the same for anyone moving between the two installs.
 
 ## Contributing
 
