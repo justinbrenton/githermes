@@ -1793,7 +1793,7 @@ function PrListRow({ pr, onOpen, onFilter }) {
         ] }),
         jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
           pr.author?.login
-            ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => onFilter(event, 'author', pr.author.login), children: `@${pr.author.login}` })
+            ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => onFilter(event, 'author', pr.author.login), children: pr.author.login })
             : null,
           ...(Array.isArray(pr.labels)
             ? pr.labels.map(label => jsx(LabelChip, { label, onClick: event => onFilter(event, 'label', label.name) }, label.name || label.id))
@@ -1900,8 +1900,8 @@ function IssueListRow({ issue, onOpen, onFilter }) {
     ? jsx('span', { className: 'mt-1 flex flex-wrap gap-1 items-center', children: issue.labels.map(l => jsx(LabelChip, { label: l, onClick: event => onFilter(event, 'label', l.name) }, l.name || l.id)) })
     : null
   const authorBtn = issue.author?.login
-    ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => onFilter(event, 'author', issue.author.login), children: `@${issue.author.login}` })
-    : '\u2014'
+    ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => onFilter(event, 'author', issue.author.login), children: issue.author.login })
+    : '—'
   return jsxs('div', {
     role: 'button',
     tabIndex: 0,

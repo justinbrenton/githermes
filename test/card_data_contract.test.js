@@ -70,3 +70,12 @@ test('a label chip needs name and colour from both sources', () => {
   const inbox = inboxPrsCmd('is:pr author:@me')
   assert.ok(inbox.includes('labels(first:12){nodes{name color}}'), 'inbox labels need name and colour')
 })
+
+test('cards show the bare login, without an @ prefix', () => {
+  const prs = source.slice(source.indexOf('function PrListRow'), source.indexOf('function InboxView'))
+  const issues = source.slice(source.indexOf('function IssueListRow'), source.indexOf('function AllIssuesView'))
+  for (const [name, card] of [['PrListRow', prs], ['IssueListRow', issues]]) {
+    assert.ok(/children: (pr|issue)\.author\.login/.test(card), `${name} must render the login`)
+    assert.ok(!card.includes('`@${'), `${name} must not prefix the login with @`)
+  }
+})
