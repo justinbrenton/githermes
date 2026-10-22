@@ -1,17 +1,17 @@
 # GitHermes
 
-GitHub pull requests and issues in a side pane inside Hermes Desktop.
+Pull requests and issues in a side pane inside Hermes Desktop.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Hermes Desktop: v0.22.1+](https://img.shields.io/badge/hermes%20desktop-0.22.1%2B-6b46c1.svg)](https://hermes-agent.nousresearch.com/docs/user-guide/desktop)
+[![Hermes Desktop: 0.22.2+](https://img.shields.io/badge/hermes%20desktop-0.22.2%2B-6b46c1.svg)](https://hermes-agent.nousresearch.com/docs/user-guide/desktop)
 
-GitHermes puts the review work you already do in a browser tab next to the code you are reading. Open a pull request, read the conversation, check CI, look at the diff hunks, and merge it without leaving the editor. Issues get the same treatment, with label chips in their real colors and a state filter.
+GitHermes puts the review work you already do in a browser tab beside the code you are reading. Open a pull request, read the conversation, check CI, walk the diff, and merge it without leaving the editor. Issues get the same treatment, with label chips in their real colors and an open, closed or all filter.
 
-There is no server behind it. The plugin calls the `gh` CLI through the host's shell, so anything `gh` can reach, the pane can show, and nothing leaves your machine that GitHub did not already have. No API tokens, no OAuth flow, no usage tracking.
+There is no server behind it. The pane calls the `gh` CLI through Hermes and shows what `gh` returns. No API tokens to paste, no OAuth flow, no telemetry.
 
-This repository is a fork of [claudiumio/githermes](https://github.com/claudiumio/githermes). Everything upstream ships is here, plus the Inbox and All Issues views, empty states that point at the next step, and a refresh indicator. The plugin id is unchanged, so an upstream install and this one share the same storage and settings.
+This repository is a fork of [claudiumio/githermes](https://github.com/claudiumio/githermes). Everything upstream ships is here, plus an Inbox for your own review queue, an All Issues view, shared card layout and empty states. The plugin id is unchanged, so an upstream install and this one share storage.
 
-> **Not an official Nous Research product.** GitHermes is an independent, open-source community plugin. It uses Hermes Desktop's public plugin API and is maintained separately from the Hermes team.
+> **Not an official Nous Research product.** GitHermes is an independent, open-source community plugin. It uses the Hermes Desktop plugin API and is maintained separately from the Hermes team.
 
 ## Table of contents
 
@@ -19,6 +19,9 @@ This repository is a fork of [claudiumio/githermes](https://github.com/claudiumi
 - [Features](#features)
 - [Requirements](#requirements)
 - [Install](#install)
+- [Updating](#updating)
+- [Uninstalling](#uninstalling)
+- [Coming from upstream](#coming-from-upstream)
 - [Usage](#usage)
 - [Troubleshooting](#troubleshooting)
 - [Limitations](#limitations)
@@ -29,33 +32,32 @@ This repository is a fork of [claudiumio/githermes](https://github.com/claudiumi
 
 ## Screenshots
 
-Pull requests, with CI and review status on every row:
+Pull requests:
 
 ![Pull request list with state, CI and review chips](docs/pr-list.png?v=3)
 
-A pull request, from conversation through to merge:
+A pull request, from conversation to merge:
 
 | Conversation | PR detail |
 | --- | --- |
 | ![Pull request conversation with inline review threads](docs/pr-conversation.png) | ![Pull request detail view](docs/pr-detail.png?v=3) |
 
-Commits and the issue list:
+Commits and issues:
 
 | Commits | Issues |
 | --- | --- |
 | ![Commit list with lazy-loaded details](docs/pr-commits.png) | ![Issue list with colored label chips](docs/issue-list.png) |
 
 <!--
-  New in this fork. Upload these four files to docs/ and delete the comment
-  markers around the table to publish it.
+  Pending: docs/inbox.png, docs/all-issues.png, docs/header-refresh.png, docs/empty-state.png
 
 | Inbox | All Issues |
 | --- | --- |
-| ![Inbox grouped into six PR sections](docs/inbox.png) | ![All Issues with four sections](docs/all-issues.png) |
+| ![Inbox sections](docs/inbox.png) | ![All Issues sections](docs/all-issues.png) |
 
 | Refresh indicator | Empty state |
 | --- | --- |
-| ![Updated a moment ago in the pane header](docs/header-refresh.png) | ![Empty state with a way out](docs/empty-state.png) |
+| ![Refresh indicator](docs/header-refresh.png) | ![Empty state](docs/empty-state.png) |
 -->
 
 ## Features
@@ -64,33 +66,32 @@ Commits and the issue list:
 
 | Feature | What it does |
 | --- | --- |
-| Inbox tab | Sorts your own PR work into six live sections: needs your review, needs your team's review, your drafts, waiting on review or checks, needs action, ready to merge. Each section carries a count, opens PRs like the list view, and collapses on demand |
-| All Issues tab | Assigned to you, created by you, recently updated, and mentioned, each honouring the Open / Closed / All filter. Cards match the Issues list: author avatar, labels, repo and age |
-| Empty states | When a list is empty it says why and offers the next step: clear the search, show all items, switch item type, or open the repo on GitHub |
-| Collapsible sections | Every section in Inbox and All Issues opens and closes from its header. The state is saved, so a section you hide stays hidden after a restart |
-| Refresh indicator | Shows `Updated 2m ago` on a clock icon, and a spinner with `Updating...` while a fetch runs, so a slow query never looks like a stalled one |
-
-The state filter maps onto `gh search` flags, which understand `open` and `closed` only, so "All" leaves the flag off entirely.
+| Inbox | Six sections for your own PR work: needs your review, needs your team's review, your drafts, waiting, needs action, ready to merge. It spans every repository, not just the one in the header |
+| All Issues | Issues assigned to you, created by you, recently updated, and mentioning you, each honouring the Open, Closed and All filter |
+| One card per item type | PRs and Inbox share one card, and Issues and All Issues share another. Same order, same identifiers, so a row reads the same wherever you meet it |
+| Clickable filters | Author and label chips are buttons on every row in all four tabs. A click fills the search box with `author:name` or `label:name` |
+| Empty states | An empty list says why, then offers a way out: clear the search, show all items, switch item type, or open the repository |
+| Collapsible sections | Inbox and All Issues sections fold from their header, and the choice survives a restart |
+| Refresh indicator | The header shows when the data last updated, and switches to `Updating...` while a fetch runs |
 
 ### Inherited from upstream
 
-- Pull request list with state pills, diff size, relative timestamps, plus CI and review chips
+- Pull request list with state pills, diff size, CI and review chips
 - Exact `#N` search, so `#42` never matches `#142`
-- Repository picker with pins and drag-to-reorder, plus a session chip that follows the branch of the active session
-- Conversation view with a timeline rail, GFM subset, task lists, tables and a compact checks strip
+- Repository picker with pins and drag to reorder, plus a chip for the session branch
+- Conversation view with a timeline rail, a GFM subset, tables and a checks strip
 - Inline review threads with a `file:line` chip and the matching diff hunk
-- Commit list where each row expands to load its body and files on demand
-- Unified per-file diffs with line numbers, theme diff colors and an `A`/`D`/`M`/`R` badge
-- In-pane merge with squash, merge or rebase, optional branch deletion
-- Label chips drawn in the label's own color with black or white text picked by luminance
-- Theming through the desktop app's own variables, so both light and dark themes come for free
+- Commit list and per-file diffs, both loaded on demand
+- In-pane merge with squash, merge or rebase, and optional branch deletion
+- Label chips in the label's own color, with text chosen by contrast
 
 ## Requirements
 
-- Hermes Desktop 0.22.1 or newer
+- Hermes Desktop 0.22.2 or newer
 - The [GitHub CLI](https://cli.github.com/), installed and signed in. Check with `gh auth status`
+- An open chat, because Hermes runs shell commands inside a chat session
 
-There is no build step and no dependency of its own to install.
+No build step, no dependencies of its own.
 
 ## Install
 
@@ -98,18 +99,23 @@ There is no build step and no dependency of its own to install.
 hermes plugins install justinbrenton/githermes --enable
 ```
 
-The app picks up the plugin on its next start. If the pane does not appear, run `Open GitHub pane` from the command palette first.
+Restart the app and open the pane from the GitHub entry in the sidebar. If it does not appear, run `Open GitHub pane` from the command palette.
 
-Prefer to do it by hand? Copy the one file:
+To install by hand, copy the plugin file into the directory the app reads:
 
 ```bash
+# macOS and Linux
 mkdir -p ~/.hermes/desktop-plugins/githermes
 cp desktop/plugin.js ~/.hermes/desktop-plugins/githermes/plugin.js
 ```
 
-The app hot-reloads the file on save, which makes edits quick to test.
+```powershell
+# Windows
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\hermes\desktop-plugins\githermes"
+Copy-Item desktop\plugin.js "$env:LOCALAPPDATA\hermes\desktop-plugins\githermes\plugin.js"
+```
 
-### Updating
+## Updating
 
 ```bash
 hermes plugins update githermes
@@ -117,89 +123,91 @@ hermes plugins update githermes
 
 If you installed by hand, copy `desktop/plugin.js` over the old file. Nothing else needs to move.
 
-### Uninstalling
+## Uninstalling
 
 ```bash
 hermes plugins remove githermes
 ```
 
-That removes the install. Plugin storage is namespaced by id, so removing and reinstalling clears the saved repository selection.
+Plugin storage is namespaced by id, so removing and reinstalling clears the saved repository and your collapsed sections.
 
-### Already on `claudiumio/githermes` or `github-prs`?
+## Coming from upstream
 
-Remove the old install first. The `github-prs` era used a different plugin id, so an old copy can sit beside the new one without complaint while doing nothing useful. For an upstream install the ids match, which means two copies fight over the same storage:
+Remove the old install first. An upstream install uses the same plugin id, so two copies fight over the same storage. The older `github-prs` era used a different id, so an old copy can sit beside the new one doing nothing.
 
 ```bash
-hermes plugins remove githermes       # claudiumio install
+hermes plugins remove githermes
 hermes plugins install justinbrenton/githermes --enable
 ```
 
-The saved repository selection resets when the id changes. That is a one-time cost.
+The saved repository selection resets when the id changes, which is a one-time cost.
 
 ## Usage
 
-Open the pane from the GitHub entry in the sidebar, or run `Open GitHub pane` in the command palette. Pick a repository in the header, then work through the tabs:
+Open the pane from the GitHub entry in the sidebar, or run `Open GitHub pane`. Pick a repository in the header:
 
 | Tab | What it is for |
 | --- | --- |
-| PRs | Every open pull request in the repository, filterable by Open / Closed / All |
+| PRs | Open pull requests in the selected repository, filterable by Open, Closed or All |
 | Issues | The repository's issues, same filter |
-| Inbox | Your own PR work, grouped by what it needs from you, in collapsible sections |
-| All Issues | Issues assigned to you, created by you, recently updated, or mentioning you, in collapsible sections |
+| Inbox | Your own PR work across every repository, grouped by what it needs from you |
+| All Issues | Issues assigned to you, created by you, recently updated, or mentioning you |
 
-Search applies to all four tabs, including the sections inside Inbox and All Issues. `#214` jumps straight to that item and never matches `#1214`. `author:octocat` and `label:bug` narrow the list, and quoted values work when the value has a space. Anything else filters on number, title, author, branch or label.
+A pull request row shows state, number and title, author, labels, branch, added and removed lines, file count, age, and CI and review chips. An issue row shows title, labels, author and age. Author and label chips fill the search box when clicked.
 
-Keyboard shortcuts are few and predictable: `/` puts the cursor in the search box, `Escape` clears the query, and `Enter` opens the result when the search has narrowed the list to one row.
+Search reaches all four tabs, including sections inside Inbox and All Issues. `#214` jumps to that item and never matches `#1214`. `author:octocat`, `label:bug` and `repo:owner/name` narrow the list, and quoted values work when a value has a space.
 
-In Inbox and All Issues each section header is a button: the caret on the left collapses that section, whether it has rows or not. The choice is written to plugin storage and survives a reload, which keeps a quiet section from taking up space all day.
+Shortcuts are few. `/` focuses the search box, `Escape` clears the query, and `Enter` opens the result when one row is left.
 
-Merging happens in the pane. Open a pull request, use the Merge action, choose squash, merge or rebase, and optionally delete the branch. The confirmation panel shows what will happen before it does.
+Merging happens in the pane. Choose squash, merge or rebase, and optionally delete the branch. The confirmation panel shows what will happen first.
 
-Two commands worth knowing, both in the command palette:
+Two commands sit in the command palette:
 
 - `GitHub: Open page` opens the full-page view instead of the docked pane
-- `GitHub: Toggle opening chat links in pane` decides whether GitHub links you click in chat open in the pane or in your browser
+- `GitHub: Toggle opening chat links in pane` decides whether GitHub links from chat open in the pane or the browser
 
 ## Troubleshooting
 
-### The pane says it cannot load repositories
+### The pane cannot load repositories
 
-Run `gh auth status` in a terminal. The plugin inherits whatever `gh` has, so an expired token shows up here first.
+Run `gh auth status`. The plugin inherits whatever `gh` has, so an expired or missing token shows up here first.
 
-### Nothing happens when a row is clicked
+### The pane asks you to start a chat
 
-Check that the repository in the picker is the one you expect. The pane scopes every query to the selected repo, and a stale selection looks like a broken click.
+Hermes runs shell commands inside a chat session. Send a message in any chat and the view fills in on its own.
+
+### The lists are empty but the repository has work in it
+
+Check the search box. A leftover query filters every tab at once. `Escape` clears it.
 
 ### The pane is missing entirely
 
-Confirm the plugin is installed and enabled with `hermes plugins list`. If you copied the file by hand, check that it landed at `~/.hermes/desktop-plugins/githermes/plugin.js` and not one directory higher.
+Confirm the plugin is installed and enabled with `hermes plugins list`. If you copied the file by hand, check that it landed at `desktop-plugins/githermes/plugin.js`, not one directory higher.
 
 ## Limitations
 
-- "Needs your team's review" needs a `gh` token with the `read:org` scope, because it reads your team list first. Without it that section stays empty while the other five keep working.
-- All Issues caps each section at 30 results and Mentioned at 5. The pane is built for one screen of rows, not a paginated archive.
-- No column customization, bulk actions, saved filters, command palette for pane actions, or multi-repo switcher. Those are ideas, not promises.
+- "Needs your team's review" reads your team list first, which needs a `gh` token with the `read:org` scope. Without it that section stays empty while the other five work.
+- Inbox covers open pull requests only.
+- Inbox sections cap at 50 rows. The issue sections cap at 30, and Mentioned at 5.
+- No column customization, bulk actions, saved filters or multi-repo switcher.
 
 ## Development
 
-The plugin is a single file, `desktop/plugin.js`, loaded uncompiled. The UI is written with `jsx()` and `jsxs()` calls rather than JSX syntax, because the desktop runtime loads the file directly with no build step in front of it.
+The plugin is one file, `desktop/plugin.js`, loaded as written. No bundler, nothing to compile.
 
-Two rules matter when editing:
-
-- Only the modules Hermes provides at runtime are importable. Nothing is installed from npm, and there is no bundler to resolve a stray import.
-- Keep ternaries and inline `.map()` calls out of `children` arrays. The plugin loader rejects forms that a plain syntax check accepts, so build rows into variables first and pass the variable.
-
-Tailwind classes have to exist in the app's compiled CSS already. Arbitrary `var()` bracket forms such as `bg-[var(--x)]` are silently dead at runtime; use the paren shorthand, `text-(--ui-text-tertiary)`, or a scoped `<style>` block with real theme variables.
+- Import only what Hermes provides at runtime. A stray npm package will not resolve.
+- Use the parenthesized color syntax the app understands, such as `text-(--ui-text-tertiary)`. Bracket forms like `bg-[var(--x)]` fail quietly.
+- Build rows into variables before passing them to a children array. Some inline forms pass a syntax check and still fail inside the app.
 
 ## Credits
 
-GitHermes is built and maintained by [claudiumio](https://github.com/claudiumio). This fork adds the Inbox and All Issues views on top of that work. The plugin manifest still names claudiumio as author and points at the upstream repository, so the plugin id and its storage namespace stay the same for anyone moving between the two installs.
+GitHermes is built and maintained by [claudiumio](https://github.com/claudiumio). This fork adds the Inbox and All Issues views, the shared card layout and the empty states. The manifest still names claudiumio as author and points at the upstream repository, which keeps the plugin id and its storage in place for anyone switching between installs.
 
 ## Contributing
 
-Issues and pull requests are welcome. Open an issue before starting anything large, so the shape of the change can be agreed first. Bug reports land faster with the pane's error text, your platform, and the output of `gh --version` and `hermes --version`.
+Issues and pull requests are welcome. Open an issue before starting anything large. A bug report lands faster with the pane's error text, your platform, and the output of `gh --version` and `hermes --version`.
 
-The upstream project documents its own conventions in [CONTRIBUTING.md](CONTRIBUTING.md).
+Upstream documents its own conventions in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
