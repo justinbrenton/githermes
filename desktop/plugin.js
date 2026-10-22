@@ -3245,6 +3245,21 @@ function CommentCard({ login, verb, time, timestamp, reviewState, body, permalin
 const SAFE_URL = /^https?:\/\//i
 const HTML_COMMENT = /<!--[\s\S]*?-->/g
 const HTML_TAG = /<\/?[a-zA-Z][^>]*>/g
+
+// CodeQL js/incomplete-multi-character-sanitization: one pass over a
+// multi-character pattern can rebuild the sequence it just removed, so
+// `<!<!-- c -->-->` came out as `<!-->`. Repeat until the string stops
+// shrinking, then drop any surviving `<` so no tag or comment opener can be
+// reassembled at all. `>` is left alone because blockquote lines start with it.
+export function stripHtml(text) {
+  let out = String(text ?? '')
+  let previous
+  do {
+    previous = out
+    out = out.replace(HTML_COMMENT, '').replace(HTML_TAG, '')
+  } while (out !== previous)
+  return out.replace(/</g, '')
+}
 const INLINE_RE = /(`[^`\n]+`|\*\*[^*]+\*\*|__[^_]+__|~~[^~\n]+~~|\*[^*\n]+\*|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|https?:\/\/[^\s)]+)/g
 
 const MD_ALERTS = {
@@ -3256,7 +3271,7 @@ const MD_ALERTS = {
 }
 
 function mdInline(text, key) {
-  const s = String(text ?? '').replace(HTML_TAG, '')
+  const s = stripHtml(text)
   const out = []
   let last = 0
   let i = 0
@@ -3298,7 +3313,7 @@ function mdInline(text, key) {
 
 // ponytail: GFM subset (headings, lists, task lists, tables, nested quotes, details, fences, hr, inline). Other raw HTML stripped to text. Full GFM when SDK ships markdown.
 export function mdBlocks(text) {
-  const lines = String(text || '').replace(HTML_COMMENT, '').replace(/\r\n/g, '\n').split('\n')
+  const lines = stripHtml(text).replace(/\r\n/g, '\n').split('\n')
   const blocks = []
   let i = 0
   while (i < lines.length) {
