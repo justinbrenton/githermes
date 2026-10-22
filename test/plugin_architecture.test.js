@@ -128,7 +128,7 @@ test('Issue #30: list filter tokens keep row and token actions separate', () => 
   assert.ok(row.includes("role: 'button'"), 'row opens on click through a div')
   assert.ok(row.includes("onFilter(event, 'author'"), 'author token must filter')
   assert.ok(row.includes("onFilter(event, 'label'"), 'label token must filter')
-  assert.equal((source.match(/onFilter: setListFilter/g) || []).length, 2, 'both tabs share the filter handler')
+  assert.equal((source.match(/onFilter: setListFilter/g) || []).length, 4, 'both tab pairs share the filter handler')
   assert.ok(source.includes('$listQuery.set(`${field}:${JSON.stringify(String(value))}`)'))
 })
 
@@ -254,8 +254,8 @@ test('Issue #64 review: a pending manual check cannot revert a newer repo', () =
 })
 
 test('Issue #55: lists cap explicitly and load more on demand', () => {
-  const prs = source.slice(source.indexOf('function PrList({'), source.indexOf('function IssueList'))
-  const issues = source.slice(source.indexOf('function IssueList'), source.indexOf('function AssignToBot'))
+  const prs = source.slice(source.indexOf('function PrList({'), source.indexOf('function IssueList('))
+  const issues = source.slice(source.indexOf('function IssueList('), source.indexOf('function AssignToBot'))
   const foot = source.slice(source.indexOf('function ListMoreFooter'), source.indexOf('function PrList({'))
   assert.ok(foot.includes("children: 'Show more'"), 'footer: load-more missing')
   assert.ok(foot.includes("children: 'Retry'"), 'footer: retry missing')
@@ -280,7 +280,7 @@ test('PR list rows carry a state indicator open/draft/merged/closed', () => {
 
 test('the Inbox and the PR tab render the identical card', () => {
   const inbox = source.slice(source.indexOf('function InboxView'), source.indexOf('function useCollapsedSections'))
-  const prs = source.slice(source.indexOf('function PrList({'), source.indexOf('function IssueList'))
+  const prs = source.slice(source.indexOf('function PrList({'), source.indexOf('function IssueList('))
   for (const [name, list] of [['inbox', inbox], ['prs', prs]]) {
     assert.ok(list.includes('jsx(PrListRow, {'), `${name}: must render the shared card`)
   }
@@ -290,6 +290,23 @@ test('the Inbox and the PR tab render the identical card', () => {
   const card = source.slice(source.indexOf('function PrListRow'), source.indexOf('function InboxView'))
   assert.ok(card.includes('pr.headRefName'), 'the branch name is the mono token')
   assert.ok(!card.includes('nameWithOwner'), 'the card must not print a full repo name')
+})
+
+test('the Issues tab and All Issues render the identical card', () => {
+  const allStart = source.indexOf('function AllIssuesView')
+  const all = source.slice(allStart, source.indexOf('\nfunction ', allStart + 1))
+  const list = source.slice(source.indexOf('function IssueList('), source.indexOf('function AssignToBot'))
+  for (const [name, view] of [['all-issues', all], ['issues', list]]) {
+    assert.ok(view.includes('jsx(IssueListRow, {'), `${name}: must render the shared card`)
+  }
+  const card = source.slice(source.indexOf('function IssueListRow'), source.indexOf('function AllIssuesView'))
+  // The card is a div with an inner button, which is what lets the author and
+  // label tokens be buttons themselves.
+  assert.ok(card.includes("role: 'button'"), 'row opens on click through a div')
+  assert.ok(card.includes("onFilter(event, 'author'"), 'author token must filter')
+  assert.ok(card.includes("onFilter(event, 'label'"), 'label token must filter')
+  assert.ok(card.includes('gh-card-arrow'), 'same chevron as the other tabs')
+  assert.ok(!card.includes('repository'), 'no repo chip: the Issues tab does not print one')
 })
 
 test('Repo picker rows drag to reorder and the order persists', () => {

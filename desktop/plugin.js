@@ -1118,13 +1118,16 @@ const CI_PENDING = new Set(['QUEUED', 'IN_PROGRESS', 'WAITING', 'REQUESTED', 'PE
 const CI_PASSING = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED'])
 
 export function ciState(rollup) {
-  const checks = Array.isArray(rollup) ? rollup : []
+  // Two shapes arrive here: `gh pr list` returns an array of check runs, while
+  // GraphQL returns the aggregate StatusCheckRollup object `{ state }`. Reading
+  // only the array form made every Inbox card report "No CI configured".
+  const checks = checkEntries(rollup)
   if (!checks.length) return 'none'
   let pending = false
   for (const c of checks) {
-    const raw = c?.__typename === 'StatusContext'
-      ? c.state
-      : String(c?.status || '').toUpperCase() === 'COMPLETED' ? c.conclusion : c.status
+    // CheckRun: conclusion when completed, status while queued or running.
+    // StatusContext and the GraphQL aggregate object carry `state` instead.
+    const raw = c?.conclusion || c?.state || c?.status
     const s = String(raw || '').toUpperCase()
     if (CI_FAILURES.has(s)) return 'failing'
     if (CI_PENDING.has(s) || !CI_PASSING.has(s)) pending = true
@@ -1687,7 +1690,18 @@ function issueSearchCmd(args) {
   return [GH, 'search', 'issues', ...args].filter(Boolean).join(' ')
 }
 
-const ISSUE_SEARCH_FIELDS = 'number,title,state,author,updatedAt,url,repository'
+// The card renders the author and the label chips, so every section has to ask
+// for exactly the fields the Issues tab asks for. `labels` was missing, which is
+// why All Issues cards rendered no label row at all.
+const ISSUE_SEARCH_FIELDS = 'number,title,state,author,updatedAt,url,repository,labels'
+
+export function assignedIssuesSearchCmd(state) {
+  return issueSearchCmd(['--assignee', '@me', issueSearchStateArg(state), '--limit', '30', '--json', ISSUE_SEARCH_FIELDS])
+}
+
+export function createdIssuesSearchCmd(state) {
+  return issueSearchCmd(['--author', '@me', issueSearchStateArg(state), '--limit', '30', '--json', ISSUE_SEARCH_FIELDS])
+}
 
 // `gh search issues` has no --updated-desc. Newest first is --sort/--order.
 // `--involves @me` keeps the section to issues the user actually touches;
@@ -1705,19 +1719,19 @@ export function mentionedIssuesSearchCmd(state) {
 }
 
 function useCreatedIssues(state) {
-  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'created-issues', state],
-    queryFn: async () => {
-      const out = await sh(issueSearchCmd(['--author', '@me', flag, '--limit', '30', '--json', 'number,title,state,author,updatedAt,url,repository']))
-      try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
-    },
+    queryKey: [ID, 'created-issues', 'v4', state],
     staleTime: 60_000,
+    refetchOnMount: 'always',
+    queryFn: async () => {
+      const parsed = await shJsonBig(createdIssuesSearchCmd(state)).catch(() => null)
+      return Array.isArray(parsed) ? parsed : []
+    },
   })
 }
 function useRecentIssues(state) {
   return useQuery({
-    queryKey: [ID, 'recent-issues', 'v3', state],
+    queryKey: [ID, 'recent-issues', 'v4', state],
     queryFn: async () => {
       // 30 rows with url/author/repository can pass the gateway's 4 KB stdout
       // cap that sh() inherits, which truncates the JSON mid-string.
@@ -1731,12 +1745,10 @@ function useRecentIssues(state) {
 
 function useMentionedIssues(state) {
   return useQuery({
-    queryKey: [ID, 'mentioned-issues', 'v3', state],
+    queryKey: [ID, 'mentioned-issues', 'v4', state],
     queryFn: async () => {
-      try {
-        const out = await sh(mentionedIssuesSearchCmd(state))
-        try { const parsed = JSON.parse(out); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
-      } catch { return [] }
+      const parsed = await shJsonBig(mentionedIssuesSearchCmd(state)).catch(() => null)
+      return Array.isArray(parsed) ? parsed : []
     },
     staleTime: 60_000,
     refetchOnMount: 'always',
@@ -1746,17 +1758,16 @@ function listOf(value) {
   return Array.isArray(value) ? value : []
 }
 function useAssignedIssues(state) {
-  const flag = issueSearchStateArg(state)
   return useQuery({
-    queryKey: [ID, 'assigned-issues', state],
-    queryFn: async () => {
-      const out = await sh(issueSearchCmd(['--assignee', '@me', flag, '--limit', '30', '--json', 'number,title,state,author,updatedAt,url,repository']))
-      try {
-        const parsed = JSON.parse(out)
-        return Array.isArray(parsed) ? parsed : []
-      } catch { return [] }
-    },
+    queryKey: [ID, 'assigned-issues', 'v4', state],
     staleTime: 60_000,
+    refetchOnMount: 'always',
+    queryFn: async () => {
+      // Same capped-stdout trap as Recent: 30 rows with labels and a repo can
+      // pass 4 KB, and a truncated read parses as nothing.
+      const parsed = await shJsonBig(assignedIssuesSearchCmd(state)).catch(() => null)
+      return Array.isArray(parsed) ? parsed : []
+    },
   })
 }
 
@@ -1785,7 +1796,7 @@ function PrListRow({ pr, onOpen, onFilter }) {
         ] }),
         jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
           pr.author?.login
-            ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => onFilter(event, 'author', pr.author.login), children: `@${pr.author.login}` })
+            ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => onFilter(event, 'author', pr.author.login), children: pr.author.login })
             : null,
           ...(Array.isArray(pr.labels)
             ? pr.labels.map(label => jsx(LabelChip, { label, onClick: event => onFilter(event, 'label', label.name) }, label.name || label.id))
@@ -1884,6 +1895,39 @@ function SectionHeader({ icon, title, count, collapsed, onToggle, trailing }) {
   })
 }
 
+// One card for both issue tabs. The Issues tab and All Issues show the same
+// identifiers in the same order; only the click target differs, because All
+// Issues spans repositories and has to navigate to the issue's own repo.
+function IssueListRow({ issue, onOpen, onFilter }) {
+  const labelSpan = Array.isArray(issue.labels) && issue.labels.length
+    ? jsx('span', { className: 'mt-1 flex flex-wrap gap-1 items-center', children: issue.labels.map(l => jsx(LabelChip, { label: l, onClick: event => onFilter(event, 'label', l.name) }, l.name || l.id)) })
+    : null
+  const authorBtn = issue.author?.login
+    ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => onFilter(event, 'author', issue.author.login), children: issue.author.login })
+    : '—'
+  return jsxs('div', {
+    role: 'button',
+    tabIndex: 0,
+    onClick: onOpen,
+    onKeyDown: event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        onOpen()
+      }
+    },
+    className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start',
+    children: [
+      jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: issue.author?.login, size: 24 }) }),
+      jsxs('span', { className: 'min-w-0 flex-1', children: [
+        jsx('button', { type: 'button', className: 'gh-row-open block w-full text-left', children: jsx(ItemTitle, { title: issue.title, number: issue.number }) }),
+        labelSpan,
+        jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [authorBtn, ` · ${ago(issue.updatedAt)}`] }),
+      ] }),
+      jsx(Codicon, { name: 'chevron-right', className: 'gh-card-arrow mt-1 shrink-0', 'aria-hidden': true }),
+    ],
+  })
+}
+
 function AllIssuesView({ repo }) {
   const state = useValue($issueState)
   const query = useValue($listQuery)
@@ -1905,37 +1949,21 @@ function AllIssuesView({ repo }) {
   const total = new Set([...allAssigned, ...allCreated, ...allRecent, ...allMentioned]
     .map(it => `${it?.repository?.nameWithOwner || repo || ''}#${it?.number ?? ''}`)).size
 
-  const issueRow = it => {
-    const fullRepo = (it.repository && it.repository.nameWithOwner) ? it.repository.nameWithOwner : (repo || '')
-    const labelSpan = Array.isArray(it.labels) && it.labels.length
-      ? jsx('span', { className: 'mt-1 flex flex-wrap gap-1 items-center', children: it.labels.map(l => jsx(LabelChip, { label: l }, l.name || l.id)) })
-      : null
-    return jsxs('button', {
-      type: 'button',
-      key: `${fullRepo}#${it.number}`,
-      onClick: () => navigateToSessionIssue(fullRepo, it.number),
-      className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start rounded-md hover:bg-(--ui-bg-quinary) border border-transparent hover:border-(--ui-stroke-secondary) bg-transparent',
-      children: [
-        jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: it.author?.login, size: 24 }) }),
-        jsxs('span', { className: 'min-w-0 flex-1', children: [
-          jsx(ItemTitle, { title: it.title, number: it.number }),
-          labelSpan,
-          jsxs('span', { className: 'mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-(--ui-text-tertiary)', children: [
-            it.author?.login ? jsx('span', { className: 'font-medium', children: `@${it.author.login}` }) : null,
-            jsx('span', { className: 'rounded bg-(--ui-bg-editor) px-1.5 py-0.5 font-mono', children: (it.repository && it.repository.name) || (repo ? String(repo).split('/')[1] : '-') }),
-            jsx('span', { className: 'text-(--ui-text-quaternary)', children: '·' }),
-            jsx('span', { children: ago(it.updatedAt) || new Date(it.updatedAt || '').toLocaleDateString() }),
-          ] }),
-        ] }),
-        jsx(Codicon, { name: 'chevron-right', className: 'mt-1 shrink-0 text-(--ui-text-quaternary)', 'aria-hidden': true }),
-      ],
-    })
-  }
+  const openIssue = it => navigateToSessionIssue(
+    (it.repository && it.repository.nameWithOwner) || repo || '',
+    it.number,
+  )
 
   const section = (key, icon, title, q, list, empty) => {
     const isCollapsed = !!collapsed[key]
     const body = list.length
-      ? list.map(issueRow)
+      ? list.map(it => jsx(IssueListRow, {
+        issue: it,
+        onFilter: setListFilter,
+        onOpen: () => openIssue(it),
+      }, `${
+        (it.repository && it.repository.nameWithOwner) || repo || ''
+      }#${it.number}`))
       : q.isLoading && !q.data
         ? jsx('p', { className: subClass + ' px-3', children: 'Loading…' })
         : jsx('p', { className: subClass + ' px-3 italic', children: empty })
@@ -3651,36 +3679,11 @@ function IssueList({ repo, onOpen, query, active = true }) {
           jsx('span', { className: 'font-normal text-(--ui-text-quaternary)', children: `Showing latest ${allItems.length}` }),
           jsx(Badge, { variant: 'secondary', className: 'ml-auto h-5 min-w-5 justify-center text-[10px]', children: String(items.length) }),
         ] }),
-        (() => {
-          const itemRows = items.map(it => {
-            const labelSpan = Array.isArray(it.labels) && it.labels.length
-              ? jsx('span', { className: 'mt-1 flex flex-wrap gap-1 items-center', children: it.labels.map(l => jsx(LabelChip, { label: l, onClick: event => setListFilter(event, 'label', l.name) }, l.name || l.id)) })
-              : null
-            const authorBtn = it.author?.login
-              ? jsx('button', { type: 'button', className: 'gh-filter-token', onClick: event => setListFilter(event, 'author', it.author?.login), children: `@${it.author.login}` })
-              : '—'
-            return jsxs('div', {
-              onClick: () => onOpen(it.number),
-              className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start',
-              children: [
-                jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: it.author?.login, size: 24 }) }),
-                jsxs('span', {
-                  className: 'min-w-0 flex-1',
-                  children: [
-                    jsx('button', { type: 'button', className: 'gh-row-open block w-full text-left', children: jsx(ItemTitle, { title: it.title, number: it.number }) }),
-                    labelSpan,
-                    jsxs('span', { className: 'text-[10px] text-(--ui-text-tertiary)', children: [
-                      authorBtn,
-                      ` · ${ago(it.updatedAt)}`,
-                    ] }),
-                  ],
-                }),
-                jsx(Codicon, { name: 'chevron-right', className: 'gh-card-arrow mt-1 shrink-0', 'aria-hidden': true }),
-              ],
-            }, String(it.number))
-          })
-          return itemRows
-        })(),
+        ...items.map(it => jsx(IssueListRow, {
+          issue: it,
+          onFilter: setListFilter,
+          onOpen: () => onOpen(it.number),
+        }, String(it.number))),
         ListMoreFooter({ q, limit, setLimit, allItems }),
       ],
     }),
